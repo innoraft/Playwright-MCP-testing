@@ -1,0 +1,7 @@
+{
+  "headless": false,
+  "browser": "chromium",
+  "viewportSize": "1280x720",
+  "ignore-https-errors": true,
+  "output-dir": "./test-screenshots"
+}

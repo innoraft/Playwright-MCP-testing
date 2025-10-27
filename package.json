@@ -1,0 +1,44 @@
+{
+  "name": "playwright-mcp-testing",
+  "version": "1.0.0",
+  "description": "AI-driven test automation framework combining Model Context Protocol with Playwright for natural language testing",
+  "main": "mcp_llm_runner.js",
+  "type": "module",
+  "keywords": [
+    "playwright",
+    "testing",
+    "automation",
+    "mcp",
+    "ai",
+    "natural-language",
+    "e2e",
+    "browser-testing"
+  ],
+  "author": "InnoRaft",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/innoraft/Playwright-MCP-testing.git"
+  },
+  "bugs": {
+    "url": "https://github.com/innoraft/Playwright-MCP-testing/issues"
+  },
+  "homepage": "https://github.com/innoraft/Playwright-MCP-testing#readme",
+  "scripts": {
+    "test": "node mcp_llm_runner.js tests/simple-test.test.txt",
+    "test:all": "for file in tests/*.test.txt; do echo \"Running $file\"; node mcp_llm_runner.js \"$file\"; done",
+    "test:simple": "node mcp_llm_runner.js tests/simple-test.test.txt",
+    "test:navigation": "node mcp_llm_runner.js tests/simple-navigation.test.txt",
+    "test:drupal": "node mcp_llm_runner.js tests/drupal-login.test.txt",
+    "run": "node mcp_llm_runner.js",
+    "start": "node mcp_llm_runner.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@playwright/mcp": "^0.0.42",
+    "@playwright/test": "^1.40.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
