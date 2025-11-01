@@ -260,7 +260,7 @@ npm run lint
 
 ### Core Functions
 
-- `runMcpActions(actions)`: Execute a sequence of browser actions
+- `runMcpActions(actions, context)`: Execute a sequence of browser actions with shared test context
 - `extractEvaluationResult(result)`: Parse test evaluation outcomes
 - `generateReport(report)`: Create comprehensive test reports
 - `findElementRef(snapshot, description)`: AI-powered element detection
