@@ -31,11 +31,18 @@
     "test:navigation": "node mcp_llm_runner.js tests/simple-navigation.test.txt",
     "test:drupal": "node mcp_llm_runner.js tests/drupal-login.test.txt",
     "run": "node mcp_llm_runner.js",
-    "start": "node mcp_llm_runner.js"
+    "start": "node mcp_llm_runner.js",
+    "direct": "node direct_mcp_simple.js",
+    "direct:simple": "node direct_mcp_simple.js tests/simple-test.test.txt",
+    "direct:navigation": "node direct_mcp_simple.js tests/simple-navigation.test.txt",
+    "stateless": "node direct_mcp_stateless.js",
+    "stateless:simple": "node direct_mcp_stateless.js tests/simple-test.test.yml",
+    "stateless:alerts": "node direct_mcp_stateless.js tests/alerts-javascript.test.yml",
+    "stateless:autonomous": "node direct_mcp_stateless.js tests/autonomous-complex.test.txt"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",
-    "@playwright/mcp": "^0.0.42",
+    "@playwright/mcp": "^0.0.45",
     "@playwright/test": "^1.40.0"
   },
   "engines": {
