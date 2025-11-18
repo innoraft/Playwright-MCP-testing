@@ -107,7 +107,44 @@ class StatelessMCPRunner {
     return this.mcpTools;
   }
 
+  generateMCPFunctions() {
+    const functions = [];
+    
+    // Real MCP tools
+    for (const [toolName, tool] of this.mcpTools) {
+      functions.push({
+        name: `mcp_${toolName}`,
+        description: tool.description || `Execute MCP tool: ${toolName}`,
+        parameters: tool.inputSchema || {
+          type: "object",
+          properties: {},
+          required: []
+        }
+      });
+    }
+    
+    // Virtual assertion tool
+    functions.push({
+      name: 'mcp_assert',
+      description: 'Test assertion that fails if expression evaluates to false',
+      parameters: {
+        type: 'object',
+        properties: {
+          expression: {
+            type: 'string',
+            description: 'JavaScript boolean expression (e.g., "window.location.href.includes(\'/login\')")'
+          },
+          failureMessage: {
+            type: 'string',
+            description: 'Error message if assertion fails'
+          }
+        },
+        required: ['expression', 'failureMessage']
+      }
+    });
 
+    return functions;
+  }
 
   extractExpectedValue(expression) {
     // Handle comparison operators (===, ==, !==, !=, >, <, >=, <=)
@@ -328,6 +365,7 @@ Assertion Result: FAILED
       fetchFn = mod.default ?? mod;
     }
 
+    const functions = this.generateMCPFunctions();
     
     const response = await fetchFn('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -389,13 +427,19 @@ ABSOLUTE RULES - NO EXCEPTIONS:
 4. Execute ONE tool call per step, then WAIT for the next user instruction
 5. For verification steps, use the EXACT expected values from the test - do NOT modify them
 6. After completing ALL ${actualStepCount} steps, respond with ONLY the text "TEST COMPLETED" and NO tool calls
-IF the step passes succefssfully return TRUEX else FALSEX.
+7. Choose the appropriate tool for each step based on what the step describes
+
+Available tools: ${Array.from(this.mcpTools.keys()).map(n => `mcp_${n}`).join(', ')}, mcp_assert
 
 TEST STEPS TO EXECUTE (${actualStepCount} steps total):
 ${testText}
 
 CRITICAL: This test has ${actualStepCount} steps. Execute them in order, one at a time. After step ${actualStepCount}, say "TEST COMPLETED".`
       },
+      {
+        role: "user",
+        content: "Execute step 1"
+      }
     ];
 
     let stepCount = 0;
@@ -428,7 +472,6 @@ CRITICAL: This test has ${actualStepCount} steps. Execute them in order, one at 
         
         try {
           const result = await this.executeFunctionCall(response.function_call);
-          console.log(result);
           log.success('Action succeeded');
           
           // 2️⃣ After function call results - sanitize before pushing
