@@ -33,7 +33,7 @@ export class TestReportGenerator {
     const sanitizedTestName = testName.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
     const paddedIndex = String(actionIndex + 1).padStart(2, '0');
     const timestamp = Date.now();
-    
+
     // Generate predictable filename: testname_action01_type_timestamp.png
     return `${sanitizedTestName}_action${paddedIndex}_${actionType}_${timestamp}.png`;
   }
@@ -69,7 +69,7 @@ export class TestReportGenerator {
    */
   extractActionType(action) {
     if (!action.tool) return 'unknown';
-    
+
     // Map MCP tool names to readable action types
     const toolTypeMap = {
       'browser_navigate': 'navigation',
@@ -86,7 +86,7 @@ export class TestReportGenerator {
       'browser_press_key': 'key',
       'browser_handle_dialog': 'dialog'
     };
-    
+
     // Remove 'mcp_' prefix if present
     const cleanTool = action.tool.replace(/^mcp_/, '');
     return toolTypeMap[cleanTool] || cleanTool.replace('browser_', '');
@@ -101,23 +101,23 @@ export class TestReportGenerator {
     // Finalize test report data
     testReport.endTime = new Date();
     testReport.duration = testReport.endTime - testReport.startTime;
-    
+
     // Calculate overall test result based on individual action results
     testReport.testResult = testReport.failedActions === 0 ? 'pass' : 'fail';
-    
+
     const timestamp = Date.now();
     const htmlReportFile = path.join(this.config.reporting.outputDir, `autonomous_mcp_report_${timestamp}.html`);
-    
+
     // Ensure directories exist
     this.ensureDirectories();
-    
+
     // Generate HTML report with embedded screenshots
     const htmlReport = this.generateHTMLReport(testReport);
     fs.writeFileSync(htmlReportFile, htmlReport);
-    
+
     // Log report generation
     this.logReportGeneration(testReport, htmlReportFile);
-    
+
     return {
       htmlReport: htmlReportFile,
       testReport
@@ -154,10 +154,10 @@ export class TestReportGenerator {
    * @returns {string} - Complete HTML report
    */
   generateHTMLReport(testReport) {
-    const successRate = testReport.totalActions > 0 
+    const successRate = testReport.totalActions > 0
       ? ((testReport.passedActions / testReport.totalActions) * 100).toFixed(1)
       : 0;
-    
+
     const formatDuration = (ms) => {
       if (ms < 1000) return `${ms}ms`;
       if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -166,62 +166,24 @@ export class TestReportGenerator {
 
     // Find all screenshots and process them for embedding
     const screenshots = this.findScreenshots();
-    
-    const actionsWithScreenshots = testReport.actions.map((action, index) => {
-      // ONLY attach screenshots to actions that actually took screenshots
-      // This fixes the issue where every action was getting a screenshot attached
-      
-      let screenshotFilename = null;
-      
-      // Method 1: Direct filename matching for browser_take_screenshot actions
-      if (action.tool === 'mcp_browser_take_screenshot' && action.params && action.params.filename) {
-        screenshotFilename = action.params.filename;
-        console.log(`📸 Screenshot action detected: ${screenshotFilename}`);
-        
-        // If we found a screenshot action, try to embed it
-        const base64Data = this.embedScreenshot(screenshotFilename);
-        if (base64Data) {
-          return { ...action, screenshotBase64: base64Data, screenshotFilename };
-        } else {
-          console.log(`❌ Failed to embed screenshot: ${screenshotFilename}`);
-        }
-      }
-      
-      // Method 2: Check if this action has a screenshot filename in its result
-      // Handle both string content and array content from MCP
-      if (action.result && action.result.content) {
-        let contentText = '';
-        
-        // If content is an array (MCP format), extract text
-        if (Array.isArray(action.result.content)) {
-          const textContent = action.result.content.find(c => c.type === 'text');
-          if (textContent && textContent.text) {
-            contentText = textContent.text;
-          }
-        } else if (typeof action.result.content === 'string') {
-          contentText = action.result.content;
-        }
-        
-        if (contentText) {
-          // Look for screenshot filenames in the result content
-          const screenshotPattern = /([a-zA-Z0-9_-]+\.png)/g;
-          const matches = contentText.match(screenshotPattern);
-          if (matches && matches.length > 0) {
-            screenshotFilename = matches[0];
-            console.log(`📸 Found screenshot in result: ${screenshotFilename}`);
-            
-            const base64Data = this.embedScreenshot(screenshotFilename);
-            if (base64Data) {
-              return { ...action, screenshotBase64: base64Data, screenshotFilename };
-            }
-          }
-        }
-      }
-      
-      // Return action without screenshot (this is the key fix)
-      return action;
+
+    const actionsWithScreenshots = testReport.actions.map((action) => {
+      if (!action.screenshot) return action;
+
+      const screenshotFilename = path.basename(action.screenshot);
+      const base64Data = this.embedScreenshot(screenshotFilename);
+
+      if (!base64Data) return action;
+
+      return {
+        ...action,
+        screenshotBase64: base64Data,
+        screenshotFilename
+      };
     });
-    
+
+
+
     // Don't try to assign screenshots to actions that didn't take them
     // This was causing the issue where every action had a screenshot attached
     console.log(`📊 Actions with screenshots: ${actionsWithScreenshots.filter(a => a.screenshotBase64).length}/${actionsWithScreenshots.length}`);
@@ -280,17 +242,17 @@ export class TestReportGenerator {
    * @param {string} filename - Screenshot filename
    * @returns {string|null} - Base64 data URL or null
    */
-  embedScreenshot(filename) {    
+  embedScreenshot(filename) {
     const screenshotPath = path.join(this.config.reporting.screenshotsDir, filename);
-    
+
     if (fs.existsSync(screenshotPath)) {
       try {
         const imageData = fs.readFileSync(screenshotPath);
         const base64 = imageData.toString('base64');
         const extension = path.extname(filename).toLowerCase();
-        const mimeType = extension === '.png' ? 'image/png' : 
-                        extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : 'image/png';
-        
+        const mimeType = extension === '.png' ? 'image/png' :
+          extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : 'image/png';
+
         return `data:${mimeType};base64,${base64}`;
       } catch (error) {
         console.error(`❌ Error reading screenshot ${filename}: ${error.message}`);
@@ -298,21 +260,21 @@ export class TestReportGenerator {
       }
     } else {
       console.warn(`⚠️ Screenshot file not found: ${screenshotPath}`);
-      
+
       // Try to find similar files
       if (fs.existsSync(this.config.reporting.screenshotsDir)) {
         const files = fs.readdirSync(this.config.reporting.screenshotsDir);
-        const similarFiles = files.filter(file => 
+        const similarFiles = files.filter(file =>
           file.toLowerCase().includes(filename.toLowerCase().replace('.png', '').replace('.jpg', '').replace('.jpeg', ''))
         );
-        
+
         if (similarFiles.length > 0) {
           console.log(`🔍 Found similar files: ${similarFiles.join(', ')}`);
           // Try the first similar file
           return this.embedScreenshot(similarFiles[0]);
         }
       }
-      
+
       return null;
     }
   }
@@ -390,27 +352,27 @@ export class TestReportGenerator {
    */
   formatData(data, indentLevel = 0) {
     if (!data) return '<em>None</em>';
-    
+
     const indent = '  '.repeat(indentLevel);
-    
+
     // Handle primitives
     if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
       return `<strong>${data}</strong>`;
     }
-    
+
     // Handle arrays
     if (Array.isArray(data)) {
       if (data.length === 0) return '<em>Empty array</em>';
-      return data.map((item, idx) => 
+      return data.map((item, idx) =>
         `${indent}<strong>•</strong> ${this.formatData(item, indentLevel + 1)}`
       ).join('<br>');
     }
-    
+
     // Handle objects
     if (typeof data === 'object') {
       const keys = Object.keys(data);
       if (keys.length === 0) return '<em>Empty object</em>';
-      
+
       return keys.map(key => {
         const value = data[key];
         // Skip large/complex nested objects
@@ -420,7 +382,7 @@ export class TestReportGenerator {
         return `${indent}<strong>${key}:</strong> ${this.formatData(value, indentLevel + 1)}`;
       }).join('<br>');
     }
-    
+
     return String(data);
   }
 
@@ -429,10 +391,10 @@ export class TestReportGenerator {
    */
   formatAssertionResult(action) {
     if (action.tool !== 'mcp_assert') return null;
-    
+
     const result = action.result || {};
     const status = action.success ? '✅ Passed' : '❌ Failed';
-    
+
     return `
       <div class="detail-section" style="background: ${action.success ? '#f0fdf4' : '#fef2f2'}; padding: 15px; border-radius: 6px; border: 1px solid ${action.success ? '#86efac' : '#fecaca'};">
         <div style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">${status}</div>
@@ -461,7 +423,7 @@ export class TestReportGenerator {
             
             <div id="actions-container">
                 ${actionsWithScreenshots.map((action, idx) => {
-                  return `
+      return `
                     <div class="action-item ${action.status}" data-status="${action.status}">
                         <div class="action-header" onclick="toggleAction(${idx})">
                             <div class="action-title">
@@ -531,7 +493,7 @@ export class TestReportGenerator {
             <p style="margin-top: 8px; color: #9ca3af;">
                 Start: ${testReport.startTime.toLocaleTimeString()} | 
                 End: ${testReport.endTime ? testReport.endTime.toLocaleTimeString() : 'In Progress'} | 
-                Duration: ${testReport.duration ? (testReport.duration/1000).toFixed(2) : '0'}s
+                Duration: ${testReport.duration ? (testReport.duration / 1000).toFixed(2) : '0'}s
             </p>
             <p style="margin-top: 8px; color: #9ca3af;">
                 Report generated by Autonomous LLM-MCP Test Runner v1.0

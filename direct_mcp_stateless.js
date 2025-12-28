@@ -22,8 +22,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ---------- CONFIG ----------
 const config = {
   llm: {
-    model: 'gpt-4o-mini',
-    temperature: 0.1,
+    model: 'gpt-5',
+    temperature: 1,
     apiKey: process.env.OPENAI_API_KEY
   },
   browser: {
@@ -42,7 +42,7 @@ const log = {
   success: (msg) => console.log(`✅ ${msg}`),
   error: (msg, err) => console.error(`❌ ${msg}`, err || ''),
   warn: (msg) => console.warn(`⚠️  ${msg}`),
-  tool: (name, args) => console.log(`🔧 Tool: ${name}(${JSON.stringify(args).substring(0, 80)}...)`),
+  tool: (name, args) => console.log(`🔧 Tool: ${name}(${JSON.stringify(args).substring(0, 120)}...)`),
   llm: (msg) => console.log(`🤖 LLM: ${msg}`)
 };
 
@@ -59,43 +59,89 @@ class StatelessMCPRunner {
     this.reportGenerator = new TestReportGenerator(config);
     this.testReport = null;
   }
-  sanitizeLLMContent(content) {
-  if (!content) return content;
-  // Remove long base64 blobs or large JSON blocks
-  return content
-    .replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, '[screenshot-omitted]')
-    .replace(/"data":\s*"[^"]{500,}"/g, '"data": "[omitted]"')
-    .replace(/"content":\s*"[^"]{500,}"/g, '"content": "[omitted]"');
-}
+
+  extractScreenshotPath(result) {
+    if (!result || !Array.isArray(result.content)) return null;
+
+    // Collect ALL text output
+    const fullText = result.content
+      .filter(c => c.type === 'text' && typeof c.text === 'string')
+      .map(c => c.text)
+      .join('\n');
+
+    if (!fullText) return null;
+
+    // Match any image filename Playwright might emit
+    const matches = fullText.match(/([^\s"'()]+?\.(png|jpg|jpeg))/gi);
+    if (!matches || matches.length === 0) return null;
+
+    // Return LAST screenshot (most relevant)
+    const filename = path.basename(matches[matches.length - 1]);
+
+    return path.join(config.reporting.screenshotsDir, filename);
+  }
+
+  recordAction({ tool, params, status, assertion, error, duration, screenshot }) {
+    this.testResults.actions.push({
+      tool,
+      params,
+      status,
+      assertion: assertion || null,  // Add this
+      error: error || null,
+      duration,
+      screenshot: screenshot || null,
+      timestamp: new Date()
+    });
+
+    console.log("tool:" + tool)
+    console.log("param" + params)
+    console.log("status:" + status)
+    console.log("assertion:" + assertion)  // Add this
+    console.log("error: " + error)
+    console.log("duration: " + duration)
+    console.log("screenshot : " + screenshot)
+
+    if (status === 'passed') this.testResults.passed++;
+    if (status === 'failed') this.testResults.failed++;
+  }
+
   async initializeMCP() {
+    const screenshotsDir = path.resolve(config.reporting.screenshotsDir);
+
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+      log.info(`Created screenshots directory: ${screenshotsDir}`);
+    }
+
     const transport = new StdioClientTransport({
       command: 'npx',
+      cwd: screenshotsDir,
       args: [
         '@playwright/mcp@latest',
         '--ignore-https-errors',
-        '--output-dir', config.reporting.screenshotsDir,
+        '--output-dir', screenshotsDir,
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
-      env: { 
-        ...process.env, 
+      env: {
+        ...process.env,
         PLAYWRIGHT_HEADLESS: config.browser.headless ? '1' : '0',
         DISPLAY: process.env.DISPLAY || ':0'
       }
     });
 
-    this.mcpClient = new Client({ 
-      name: 'stateless-mcp-runner', 
-      version: '2.0.0' 
+    this.mcpClient = new Client({
+      name: 'stateless-mcp-runner',
+      version: '2.0.0'
     });
-    
+
     await this.mcpClient.connect(transport);
     log.success(`Connected to MCP: ${JSON.stringify(this.mcpClient.getServerVersion())}`);
 
     // Discover tools
     const toolsList = await this.mcpClient.listTools();
     log.info(`Discovered ${toolsList.tools.length} MCP tools`);
-    
+
     for (const tool of toolsList.tools) {
       this.mcpTools.set(tool.name, {
         name: tool.name,
@@ -107,432 +153,278 @@ class StatelessMCPRunner {
     return this.mcpTools;
   }
 
-  generateMCPFunctions() {
-    const functions = [];
-    
-    // Real MCP tools
-    for (const [toolName, tool] of this.mcpTools) {
-      functions.push({
-        name: `mcp_${toolName}`,
-        description: tool.description || `Execute MCP tool: ${toolName}`,
+  generateMCPTools() {
+    return Array.from(this.mcpTools.values()).map(tool => ({
+      type: 'function',
+      function: {
+        name: `mcp_${tool.name}`,
+        description: tool.description,
         parameters: tool.inputSchema || {
-          type: "object",
+          type: 'object',
           properties: {},
           required: []
         }
-      });
-    }
-    
-    // Virtual assertion tool
-    functions.push({
-      name: 'mcp_assert',
-      description: 'Test assertion that fails if expression evaluates to false',
-      parameters: {
-        type: 'object',
-        properties: {
-          expression: {
-            type: 'string',
-            description: 'JavaScript boolean expression (e.g., "window.location.href.includes(\'/login\')")'
-          },
-          failureMessage: {
-            type: 'string',
-            description: 'Error message if assertion fails'
-          }
-        },
-        required: ['expression', 'failureMessage']
       }
-    });
-
-    return functions;
+    }));
   }
 
-  extractExpectedValue(expression) {
-    // Handle comparison operators (===, ==, !==, !=, >, <, >=, <=)
-    const comparisonMatch = expression.match(/(?:===|==|!==|!=|>=|<=|>|<)\s*['"](.+?)['"]/);
-    if (comparisonMatch) {
-      return comparisonMatch[1];
-    }
-    
-    // Handle numeric comparisons
-    const numericMatch = expression.match(/(?:===|==|!==|!=|>=|<=|>|<)\s*(\d+(?:\.\d+)?)/);
-    if (numericMatch) {
-      return numericMatch[1];
-    }
-    
-    // Handle .includes() method calls
-    const includesMatch = expression.match(/\.includes\s*\(\s*['"](.+?)['"]\s*\)/);
-    if (includesMatch) {
-      return `text contains "${includesMatch[1]}"`;
-    }
-    
-    // Handle .startsWith() method calls
-    const startsWithMatch = expression.match(/\.startsWith\s*\(\s*['"](.+?)['"]\s*\)/);
-    if (startsWithMatch) {
-      return `text starts with "${startsWithMatch[1]}"`;
-    }
-    
-    // Handle .endsWith() method calls
-    const endsWithMatch = expression.match(/\.endsWith\s*\(\s*['"](.+?)['"]\s*\)/);
-    if (endsWithMatch) {
-      return `text ends with "${endsWithMatch[1]}"`;
-    }
-    
-    // Handle boolean expressions that should be true
-    if (expression.includes('.includes(') || expression.includes('.startsWith(') || expression.includes('.endsWith(')) {
-      return 'true (condition should be met)';
-    }
-    
-    // For other expressions, try to infer what's expected
-    return 'true (assertion should pass)';
-  }
-
-  async callMCPTool(toolName, params) {
+  async executeMCP(toolName, params) {
     log.tool(toolName, params);
-    
-    const actionStart = Date.now();
-    const result = await this.mcpClient.callTool({ 
-      name: toolName, 
-      arguments: params 
+    const start = Date.now();
+
+    const result = await this.mcpClient.callTool({
+      name: toolName,
+      arguments: params
     });
-    const actionDuration = Date.now() - actionStart;
-    
-    this.testResults.passed++;
-    this.testResults.actions.push({
-      tool: `mcp_${toolName}`,
-      params: params,
-      status: 'passed',
-      result: result,
-      duration: actionDuration,
-      timestamp: new Date()
-    });
-    
-    return result;
+    console.log(result)
+    const duration = Date.now() - start;
+
+    if (result.isError) {
+      // Don't record here, just throw with context
+      const error = new Error(`MCP Tool Error: ${JSON.stringify(result.content)}`);
+      error.duration = duration;
+      console.log(" i am from executemcp->", error)
+      throw error;
+    }
+
+    // Check if result contains "false" in text content
+    if (Array.isArray(result.content)) {
+      const textContent = result.content.find(c => c.type === 'text')?.text || '';
+      if (textContent.toLowerCase().includes('false')) {
+        const error = new Error(`MCP Tool returned false: ${textContent}`);
+        error.duration = duration;
+        throw error;
+      }
+    }
+
+    return { result, duration };
   }
 
-  async executeFunctionCall(functionCall) {
-    const functionName = functionCall.name;
-    const args = JSON.parse(functionCall.arguments);
+  async callLLM(messages, includeTools = false) {
+    if (!config.llm.apiKey) throw new Error('OPENAI_API_KEY not set');
 
-    // Handle virtual assertion tool
-    if (functionName === 'mcp_assert') {
-      log.info('Executing assertion', args.expression);
-      
-      // First, get the actual value by extracting the base expression
-      let actualValue = 'unknown';
-      let actualRawValue = null;
-      try {
-        // For method calls like .includes(), .contains(), etc., get the object
-        // For comparisons like ===, get the left side
-        let leftSideExpr = null;
-        
-        // Check for method calls first (e.g., str.includes('x'))
-        const methodMatch = args.expression.match(/^(.+?)\.(includes|contains|startsWith|endsWith)\(/);
-        if (methodMatch) {
-          leftSideExpr = methodMatch[1].trim();
-        } else {
-          // Check for comparison operators
-          const comparisonMatch = args.expression.match(/^(.+?)\s*(?:===|==|!==|!=|>|<|>=|<=)\s*/);
-          if (comparisonMatch) {
-            leftSideExpr = comparisonMatch[1].trim();
-          }
-        }
-        
-        if (leftSideExpr) {
-          const actualResult = await this.mcpClient.callTool({ 
-            name: 'browser_evaluate', 
-            arguments: { function: `() => ${leftSideExpr}` }  // Wrap in function
-          });
-          actualRawValue = actualResult;
-          
-          // Extract the actual value from the MCP response
-          if (actualResult && actualResult.content) {
-            if (Array.isArray(actualResult.content)) {
-              const textContent = actualResult.content.find(c => c.type === 'text');
-              if (textContent && textContent.text) {
-                // Parse the actual value from MCP response format "### Result\nVALUE\n\n### Ran..."
-                const match = textContent.text.match(/### Result\s*\n\s*(.+?)(?:\n\n### Ran|$)/s);
-                if (match) {
-                  actualValue = match[1].trim();
-                } else {
-                  actualValue = textContent.text;
-                }
-              }
-            } else {
-              actualValue = JSON.stringify(actualResult.content);
-            }
-          } else if (actualResult && actualResult.result !== undefined) {
-            actualValue = JSON.stringify(actualResult.result);
-          }
-        }
-      } catch (e) {
-        actualValue = 'Error getting value: ' + e.message;
-      }
-      
-      // Now evaluate the full assertion (also needs to be wrapped in function)
-      const evalResult = await this.callMCPTool('browser_evaluate', { 
-        function: `() => ${args.expression}`
-      });
+    const fetchFn = globalThis.fetch || (await import('node-fetch')).default;
 
-      // Extract the boolean result from MCP response
-      let assertionPassed = false;
-      if (evalResult && evalResult.content) {
-        if (Array.isArray(evalResult.content)) {
-          const textContent = evalResult.content.find(c => c.type === 'text');
-          if (textContent && textContent.text) {
-            // Parse the result from the text (it's in format "### Result\ntrue")
-            const match = textContent.text.match(/### Result\s*\n\s*(true|false)/);
-            if (match) {
-              assertionPassed = match[1] === 'true';
-            }
-          }
-        }
-      } else if (evalResult && evalResult.result !== undefined) {
-        assertionPassed = evalResult.result === true;
-      }
+    const body = {
+      model: config.llm.model,
+      temperature: config.llm.temperature,
+      messages
+    };
 
-      if (assertionPassed) {
-        log.success('Assertion passed');
-        
-        // Extract expected value from expression
-        const expectedValue = this.extractExpectedValue(args.expression);
-        
-        // Track passed assertion
-        this.testResults.passed++;
-        this.testResults.actions.push({
-          tool: 'mcp_assert',
-          params: {
-            expression: args.expression,
-            failureMessage: args.failureMessage
-          },
-          status: 'passed',
-          success: true,
-          result: {
-            assertion: 'Passed',
-            expression: args.expression,
-            expectedValue: expectedValue,
-            actualValue: actualValue
-          },
-          duration: 0,
-          timestamp: new Date()
-        });
-        
-        return { success: true, message: 'Assertion passed' };
-      } else {
-        // Extract expected value from expression
-        const expectedValue = this.extractExpectedValue(args.expression);
-        
-        // Enhanced error message with expected vs actual
-        const detailedError = `${args.failureMessage}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Test Step Context: Verification step
-Expression Used: ${args.expression}
-Expected Value: ${expectedValue}
-Actual Value: ${actualValue}
-Assertion Result: FAILED
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-        
-        console.error('\n❌ ASSERTION FAILED:');
-        console.error(detailedError);
-        
-        this.testResults.failed++;
-        this.testResults.actions.push({
-          tool: 'assertion',
-          status: 'failed',
-          success: false,
-          error: detailedError,
-          expression: args.expression,
-          expectedValue: expectedValue,
-          actualValue: actualValue,
-          timestamp: new Date()
-        });
-        throw new Error(detailedError);
-      }
+    // Only include tools if explicitly requested (not needed for planning)
+    if (includeTools) {
+      body.tools = this.generateMCPTools();
+      body.tool_choice = 'auto';
     }
 
-    // Handle real MCP tools
-    const mcpToolName = functionName.replace('mcp_', '');
-    return await this.callMCPTool(mcpToolName, args);
-  }
-
-  async callLLM(messages) {
-    if (!config.llm.apiKey) {
-      throw new Error('OPENAI_API_KEY not set');
-    }
-
-    let fetchFn = globalThis.fetch;
-    if (!fetchFn) {
-      const mod = await import('node-fetch');
-      fetchFn = mod.default ?? mod;
-    }
-
-    const functions = this.generateMCPFunctions();
-    
-    const response = await fetchFn('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchFn(
+      'https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.llm.apiKey}`
+        Authorization: `Bearer ${config.llm.apiKey}`
       },
-      body: JSON.stringify({
-        model: config.llm.model,
-        messages: messages,
-        temperature: config.llm.temperature,
-        functions: functions,
-        function_call: 'auto'
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API error ${response.status}: ${await response.text()}`);
+      throw new Error(await response.text());
     }
 
-    const result = await response.json();
-    return result.choices[0].message;
+    const json = await response.json();
+    return json.choices[0].message;
+  }
+
+  buildPlanningPrompt(testText, stepCount) {
+    // Dynamically inject tool definitions
+    const toolsInfo = Array.from(this.mcpTools.values()).map(tool => ({
+      name: tool.name, // Ensure this is the exact string needed to call the tool
+      description: tool.description,
+      schema: tool.inputSchema
+    }));
+
+    return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
+    Do not try to improve the test steps, don't try to imporve the test. Don't skip any step, Don't repeat any step, Dont change the sequence of the steps.
+
+## INPUT CONTEXT
+1. **AVAILABLE TOOLS:**
+${JSON.stringify(toolsInfo, null, 2)}
+
+2. **TEST STEPS:**
+${testText}
+
+## PLANNING LOGIC & RULES
+
+### 1. Tool Selection Strategy
+- **Please read the step thoroughly and extract the context of the step.
+- **Analyze the Intent:** For each test step, identify the core verb (action) and the target (noun/data).
+- **Semantic Matching:** Compare the step's intent against the **description** field of every available tool.
+- **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
+- **For screenshoot purpose try to pickup the screenshot tool.
+- **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
+
+### 2. Parameter Generation (Schema Compliance)
+- **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
+- **Data Extraction:** Extract values (selectors, text, numbers, logic) directly from the test step to populate the schema fields.
+- **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
+
+### 3. Step Classification
+- **Action:** If the step implies interaction (e.g., click, type, navigate, wait, scroll etc.), classify as \`isAssertion: false\`.
+- **Assertion:** If the step implies verification (e.g., verify, check, ensure, validate, confirm etc.), classify as \`isAssertion: true\`.
+
+### 4. Code Generation (If Applicable)
+- If a tool requires a code/script parameter (based on its schema):
+  - Generate self-contained, synchronous code.
+  - The code must implement the logic described in the test step.
+  - Do not assume the existence of external variables.
+
+## OUTPUT FORMAT
+Return a **SINGLE VALID JSON ARRAY**. Do not include markdown formatting, code blocks, or explanatory text outside the array.
+
+Target JSON Structure:
+[
+  {
+    "stepIndex": <number>,
+    "tool": "<EXACT_TOOL_NAME_FROM_LIST>",
+    "params": <OBJECT_MATCHING_TOOL_SCHEMA>,
+    "isAssertion": <boolean>,
+    "description": "<BRIEF_RATIONALE>"
+  }
+]
+
+Analyze the ${stepCount} steps and generate the execution plan now.`;
+  }
+
+  isAssertionFailure(result) {
+    if (!result || !Array.isArray(result.content)) return true;
+
+    // Common MCP patterns
+    const text = result.content.find(c => c.type === 'text')?.text;
+    const json = result.content.find(c => c.type === 'json')?.json;
+
+    // Explicit false
+    if (json === false) return true;
+
+    // Empty / falsy text
+    if (typeof text === 'string' && text.trim().toLowerCase() === 'false') {
+      return true;
+    }
+
+    // Empty arrays / objects
+    if (Array.isArray(json) && json.length === 0) return true;
+    if (json && typeof json === 'object' && Object.keys(json).length === 0) {
+      return true;
+    }
+
+    return false;
+  }
+
+  async generateExecutionPlan(testText, testSteps) {
+    log.llm('Generating execution plan...');
+
+    const planningPrompt = this.buildPlanningPrompt(testText, testSteps.length);
+
+    const response = await this.callLLM([
+      { role: 'system', content: planningPrompt },
+      { role: 'user', content: 'Generate the complete execution plan as JSON array.' }
+    ]);
+
+    // Extract JSON from response
+    let planJson = response.content;
+
+    // Remove markdown code blocks if present
+    planJson = planJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    console.log("plan ==>" + planJson)
+    try {
+      const plan = JSON.parse(planJson);
+      log.success(`Generated plan with ${plan.length} steps`);
+      return plan;
+    } catch (err) {
+      log.error('Failed to parse execution plan', err.message);
+      throw new Error(`Invalid plan JSON: ${err.message}`);
+    }
   }
 
   async runTest(testText, testName) {
     log.info(`🧪 Starting test: ${testName}`);
-    
-    // Initialize test report
+
     this.testReport = {
-      testName: testName,
-      testText: testText,
+      testName,
+      testText,
       startTime: new Date(),
       endTime: null,
-      duration: 0,
+      actions: [],
       passedActions: 0,
       failedActions: 0,
       totalActions: 0,
-      actions: [],
       testResult: 'running'
     };
-    
-    // Parse test steps to get actual count
-    const testSteps = testText.split('\n').filter(line => {
-      const trimmed = line.trim();
-      return trimmed.startsWith('-') && !trimmed.includes('if not') && !trimmed.includes('otherwise');
-    });
-    const actualStepCount = testSteps.length;
-    log.info(`Test has ${actualStepCount} steps`);
 
-    const messages = [
-      {
-        role: "system",
-        content: `You are a STRICT test execution agent. Your ONLY job is to execute test steps EXACTLY as written.
+    const testSteps = testText
+      .split('\n')
+      .filter(l => l.trim().startsWith('-'));
 
-ABSOLUTE RULES - NO EXCEPTIONS:
-1. Execute ONLY the steps listed in the test - NO additional actions beyond what is explicitly stated
-2. DO NOT repeat steps or add extra actions not specified in the test
-3. DO NOT try to "help" or "improve" the test - follow it LITERALLY word-by-word
-4. Execute ONE tool call per step, then WAIT for the next user instruction
-5. For verification steps, use the EXACT expected values from the test - do NOT modify them
-6. After completing ALL ${actualStepCount} steps, respond with ONLY the text "TEST COMPLETED" and NO tool calls
-7. Choose the appropriate tool for each step based on what the step describes
+    // Generate complete plan
+    const executionPlan = await this.generateExecutionPlan(testText, testSteps);
 
-Available tools: ${Array.from(this.mcpTools.keys()).map(n => `mcp_${n}`).join(', ')}, mcp_assert
+    // Execute plan sequentially without additional LLM calls
+    for (let i = 0; i < executionPlan.length; i++) {
+      const step = executionPlan[i];
+      const originalStep = testSteps[step.stepIndex - 1] || testSteps[i];
 
-TEST STEPS TO EXECUTE (${actualStepCount} steps total):
-${testText}
+      log.info(`\n📍 Step ${i + 1}/${executionPlan.length}: ${originalStep.trim()}`);
 
-CRITICAL: This test has ${actualStepCount} steps. Execute them in order, one at a time. After step ${actualStepCount}, say "TEST COMPLETED".`
-      },
-      {
-        role: "user",
-        content: "Execute step 1"
-      }
-    ];
 
-    let stepCount = 0;
-    const maxSteps = actualStepCount + 5; // Allow small buffer for sub-steps
-    let testCompleted = false;
+      const toolName = step.tool.replace(/^mcp_/, '');
 
-    while (stepCount < maxSteps && !testCompleted) {
-      stepCount++;
-      log.info(`Step ${stepCount}`);
-      
-      const response = await this.callLLM(messages);
-      
-      // 1️⃣ After LLM response - sanitize content before pushing
-      const cleanResponse = {
-        ...response,
-        content: this.sanitizeLLMContent(response.content),
-      };
-      messages.push(cleanResponse);
+      try {
+        const { result, duration } = await this.executeMCP(toolName, step.params);
+        const screenshotPath = this.extractScreenshotPath(result);
 
-      // Check for completion
-      if (response.content && response.content.includes("TEST COMPLETED")) {
-        log.success("Test execution completed");
-        testCompleted = true;
-        break;
-      }
-
-      // Handle function calls
-      if (response.function_call) {
-        log.llm(`Chose ${response.function_call.name}`);
-        
-        try {
-          const result = await this.executeFunctionCall(response.function_call);
-          log.success('Action succeeded');
-          
-          // 2️⃣ After function call results - sanitize before pushing
-          messages.push({
-            role: "function",
-            name: response.function_call.name,
-            content: this.sanitizeLLMContent(JSON.stringify(result))
-          });
-          
-          // Guide LLM to next step
-          if (stepCount < actualStepCount) {
-            messages.push({
-              role: "user",
-              content: `Step ${stepCount} completed. Execute step ${stepCount + 1}`
-            });
-          } else {
-            messages.push({
-              role: "user",
-              content: `All ${actualStepCount} steps completed. Respond with "TEST COMPLETED"`
-            });
-          }
-        } catch (error) {
-          log.error('Action failed', error.message);
-          
-          messages.push({
-            role: "function",
-            name: response.function_call.name,
-            content: `ERROR: ${error.message}`
-          });
-          
-          // Stop on assertion failure (but generate report first)
-          if (response.function_call.name === 'mcp_assert') {
-            testCompleted = true; // Mark as completed so we break out
-            break; // Exit the while loop to generate report
-          }
+        if (step.isAssertion && this.isAssertionFailure(result)) {
+          throw new Error('Assertion failed: condition evaluated to false');
         }
+
+        this.recordAction({
+          tool: step.tool,
+          params: step.params,
+          status: 'passed',
+          assertion: step.isAssertion || false,
+          duration,
+          screenshot: screenshotPath
+        });
+
+
+        log.success(`✓ Step ${i + 1} passed${step.isAssertion ? ' (assertion)' : ''}`);
+
+      } catch (err) {
+        log.error(`✗ Step ${i + 1} failed`, err.message);
+
+        this.recordAction({
+          tool: step.tool,
+          params: step.params,
+          status: 'failed',
+          assertion: step.isAssertion || false,
+          error: err.message,
+          duration: err.duration || 0
+        });
       }
     }
 
-    if (!testCompleted && stepCount >= maxSteps) {
-      log.warn('Test stopped: max steps reached');
-    }
-
-    // ALWAYS finalize test report (even on failure)
     this.testReport.endTime = new Date();
-    this.testReport.duration = this.testReport.endTime - this.testReport.startTime;
     this.testReport.actions = this.testResults.actions;
     this.testReport.passedActions = this.testResults.passed;
     this.testReport.failedActions = this.testResults.failed;
     this.testReport.totalActions = this.testResults.actions.length;
-    this.testReport.testResult = this.testResults.failed === 0 ? 'pass' : 'fail';
-    
-    // Generate HTML report
-    const reportResult = this.reportGenerator.generateReport(this.testReport);
-    log.success(`📊 HTML Report: ${reportResult.htmlReport}`);
-    
-    // If there were assertion failures, throw error AFTER generating report
+    this.testReport.testResult =
+      this.testResults.failed === 0 ? 'pass' : 'fail';
+
+    const report = this.reportGenerator.generateReport(this.testReport);
+    log.success(`📊 HTML Report: ${report.htmlReport}`);
+
     if (this.testResults.failed > 0) {
-      const failedActions = this.testResults.actions.filter(a => !a.success);
-      const errorMsg = failedActions.map(a => a.error).join('\n');
-      throw new Error(`Test failed with ${this.testResults.failed} assertion(s):\n${errorMsg}`);
+      throw new Error('Test failed');
     }
 
     return this.testResults;
@@ -549,41 +441,22 @@ CRITICAL: This test has ${actualStepCount} steps. Execute them in order, one at 
 // ---------- MAIN EXECUTION ----------
 async function main() {
   const testFile = process.argv[2];
-  
-  if (!testFile) {
-    console.error('Usage: node direct_mcp_stateless.js <test-file>');
+  if (!testFile || !fs.existsSync(testFile)) {
+    console.error('Usage: node direct_mcp_stateless.js <test.yml>');
     process.exit(1);
   }
 
-  if (!fs.existsSync(testFile)) {
-    console.error(`Test file not found: ${testFile}`);
-    process.exit(1);
-  }
-
-  const testText = fs.readFileSync(testFile, 'utf8');
-  const testName = path.basename(testFile);
-  
   const runner = new StatelessMCPRunner();
-  
+
   try {
     await runner.initializeMCP();
-    const results = await runner.runTest(testText, testName);
-    
-    log.info('📊 Test Results:', {
-      passed: results.passed,
-      failed: results.failed,
-      total: results.actions.length
-    });
-
-    if (results.failed > 0) {
-      log.error(`TEST FAILED: ${results.failed} assertion(s) failed`);
-      process.exit(1);
-    } else {
-      log.success(`TEST PASSED: All ${results.passed} actions succeeded`);
-      process.exit(0);
-    }
-  } catch (error) {
-    log.error('Test execution failed', error.message);
+    await runner.runTest(
+      fs.readFileSync(testFile, 'utf8'),
+      path.basename(testFile)
+    );
+    log.success('TEST PASSED');
+  } catch (err) {
+    log.error('TEST FAILED', err.message);
     process.exit(1);
   } finally {
     await runner.cleanup();
