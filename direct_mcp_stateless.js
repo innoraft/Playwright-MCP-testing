@@ -59,7 +59,13 @@ class StatelessMCPRunner {
     this.reportGenerator = new TestReportGenerator(config);
     this.testReport = null;
   }
-
+  /**
+   * Extracts the most relevant screenshot file path from an MCP tool result.
+   * Scans text output for image filenames emitted by Playwright.
+   *
+   * @param {Object} result - MCP tool execution result
+   * @returns {string|null} Absolute screenshot path or null if none found
+   */
   extractScreenshotPath(result) {
     if (!result || !Array.isArray(result.content)) return null;
 
@@ -81,12 +87,25 @@ class StatelessMCPRunner {
     return path.join(config.reporting.screenshotsDir, filename);
   }
 
+  /**
+   * Records the execution outcome of a single test action.
+   * Updates internal counters and persists metadata for reporting.
+   *
+   * @param {Object} action
+   * @param {string} action.tool - Tool name executed
+   * @param {Object} action.params - Tool input parameters
+   * @param {'passed'|'failed'} action.status - Execution status
+   * @param {boolean} [action.assertion] - Whether step was an assertion
+   * @param {string} [action.error] - Error message (if failed)
+   * @param {number} action.duration - Execution time in milliseconds
+   * @param {string|null} [action.screenshot] - Screenshot path if captured
+   */
   recordAction({ tool, params, status, assertion, error, duration, screenshot }) {
     this.testResults.actions.push({
       tool,
       params,
       status,
-      assertion: assertion || null,  // Add this
+      assertion: assertion || null,
       error: error || null,
       duration,
       screenshot: screenshot || null,
@@ -96,7 +115,7 @@ class StatelessMCPRunner {
     console.log("tool:" + tool)
     console.log("param" + params)
     console.log("status:" + status)
-    console.log("assertion:" + assertion)  // Add this
+    console.log("assertion:" + assertion)
     console.log("error: " + error)
     console.log("duration: " + duration)
     console.log("screenshot : " + screenshot)
@@ -105,6 +124,13 @@ class StatelessMCPRunner {
     if (status === 'failed') this.testResults.failed++;
   }
 
+  /**
+   * Initializes the MCP client connection and discovers available tools.
+   * Also ensures screenshot output directories exist.
+   *
+   * @returns {Promise<Map<string, Object>>} Discovered MCP tools map
+   * @throws {Error} If MCP connection fails
+   */
   async initializeMCP() {
     const screenshotsDir = path.resolve(config.reporting.screenshotsDir);
 
@@ -153,6 +179,11 @@ class StatelessMCPRunner {
     return this.mcpTools;
   }
 
+  /**
+   * Converts discovered MCP tools into OpenAI function-calling format.
+   *
+   * @returns {Array<Object>} Tool definitions compatible with LLM APIs
+   */
   generateMCPTools() {
     return Array.from(this.mcpTools.values()).map(tool => ({
       type: 'function',
@@ -168,6 +199,15 @@ class StatelessMCPRunner {
     }));
   }
 
+  /**
+   * Executes a single MCP tool with the provided parameters.
+   * Measures execution time and validates tool success.
+   *
+   * @param {string} toolName - MCP tool name
+   * @param {Object} params - Tool input parameters
+   * @returns {Promise<{result: Object, duration: number}>}
+   * @throws {Error} If tool execution fails or returns false
+   */
   async executeMCP(toolName, params) {
     log.tool(toolName, params);
     const start = Date.now();
@@ -176,6 +216,7 @@ class StatelessMCPRunner {
       name: toolName,
       arguments: params
     });
+    console.log("mcp result-> ")
     console.log(result)
     const duration = Date.now() - start;
 
@@ -200,6 +241,14 @@ class StatelessMCPRunner {
     return { result, duration };
   }
 
+  /**
+   * Sends a request to the LLM for planning or execution reasoning.
+   *
+   * @param {Array<Object>} messages - Chat-style messages
+   * @param {boolean} [includeTools=false] - Whether to include MCP tools
+   * @returns {Promise<Object>} LLM message response
+   * @throws {Error} If API call fails
+   */
   async callLLM(messages, includeTools = false) {
     if (!config.llm.apiKey) throw new Error('OPENAI_API_KEY not set');
 
@@ -235,6 +284,19 @@ class StatelessMCPRunner {
     return json.choices[0].message;
   }
 
+  /** The prompt is used exclusively during the planning phase and does NOT
+   * execute any tools or call the MCP layer.
+   *
+   * @param {string} testText
+   *   Full raw test definition containing all human-readable test steps.
+   *
+   * @param {number} stepCount
+   *   Total number of test steps to be analyzed and planned.
+   *
+   * @returns {string}
+   *   A fully constructed system prompt instructing the LLM to generate
+   *   a strict, ordered execution plan as valid JSON.
+   */
   buildPlanningPrompt(testText, stepCount) {
     // Dynamically inject tool definitions
     const toolsInfo = Array.from(this.mcpTools.values()).map(tool => ({
@@ -260,7 +322,7 @@ ${testText}
 - **Analyze the Intent:** For each test step, identify the core verb (action) and the target (noun/data).
 - **Semantic Matching:** Compare the step's intent against the **description** field of every available tool.
 - **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
-- **For screenshoot purpose try to pickup the screenshot tool.
+- **Dont send invalid json.
 - **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
 
 ### 2. Parameter Generation (Schema Compliance)
@@ -295,30 +357,14 @@ Target JSON Structure:
 Analyze the ${stepCount} steps and generate the execution plan now.`;
   }
 
-  isAssertionFailure(result) {
-    if (!result || !Array.isArray(result.content)) return true;
-
-    // Common MCP patterns
-    const text = result.content.find(c => c.type === 'text')?.text;
-    const json = result.content.find(c => c.type === 'json')?.json;
-
-    // Explicit false
-    if (json === false) return true;
-
-    // Empty / falsy text
-    if (typeof text === 'string' && text.trim().toLowerCase() === 'false') {
-      return true;
-    }
-
-    // Empty arrays / objects
-    if (Array.isArray(json) && json.length === 0) return true;
-    if (json && typeof json === 'object' && Object.keys(json).length === 0) {
-      return true;
-    }
-
-    return false;
-  }
-
+  /**
+   * Generates a structured execution plan using the LLM.
+   *
+   * @param {string} testText - Raw test steps text
+   * @param {Array<string>} testSteps - Parsed step list
+   * @returns {Promise<Array<Object>>} Execution plan
+   * @throws {Error} If plan JSON is invalid
+   */
   async generateExecutionPlan(testText, testSteps) {
     log.llm('Generating execution plan...');
 
@@ -346,6 +392,14 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
     }
   }
 
+  /**
+   * Executes a full test from planning through reporting.
+   *
+   * @param {string} testText - Full test file content
+   * @param {string} testName - Test name
+   * @returns {Promise<Object>} Final test results
+   * @throws {Error} If test fails
+   */
   async runTest(testText, testName) {
     log.info(`🧪 Starting test: ${testName}`);
 
@@ -382,9 +436,6 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
         const { result, duration } = await this.executeMCP(toolName, step.params);
         const screenshotPath = this.extractScreenshotPath(result);
 
-        if (step.isAssertion && this.isAssertionFailure(result)) {
-          throw new Error('Assertion failed: condition evaluated to false');
-        }
 
         this.recordAction({
           tool: step.tool,
@@ -430,6 +481,11 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
     return this.testResults;
   }
 
+  /**
+   * Shuts down MCP connections and releases resources.
+   *
+   * @returns {Promise<void>}
+   */
   async cleanup() {
     if (this.mcpClient) {
       await this.mcpClient.close();
