@@ -16,15 +16,18 @@ import { TestReportGenerator } from './test-report-generator.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { generateText } from 'ai';
+import { createLLM } from './llm-factory.js';
+import llmConfig from './config/llm.config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------- CONFIG ----------
 const config = {
   llm: {
-    model: 'gpt-5',
-    temperature: 1,
-    apiKey: process.env.OPENAI_API_KEY
+    provider: llmConfig.provider,
+    apiKey: llmConfig.apiKey,
+    temperature: 1
   },
   browser: {
     headless: false,
@@ -58,7 +61,12 @@ class StatelessMCPRunner {
     };
     this.reportGenerator = new TestReportGenerator(config);
     this.testReport = null;
+    this.llm = createLLM({
+      provider: config.llm.provider,
+      apiKey: config.llm.apiKey
+    });
   }
+
   /**
    * Extracts the most relevant screenshot file path from an MCP tool result.
    * Scans text output for image filenames emitted by Playwright.
@@ -112,13 +120,14 @@ class StatelessMCPRunner {
       timestamp: new Date()
     });
 
-    console.log("tool:" + tool)
-    console.log("param" + params)
-    console.log("status:" + status)
-    console.log("assertion:" + assertion)
-    console.log("error: " + error)
-    console.log("duration: " + duration)
-    console.log("screenshot : " + screenshot)
+    // console.log("tool:" + tool)
+    // console.log("param: ")
+    // console.log(params)
+    // console.log("status:" + status)
+    // console.log("assertion:" + assertion)
+    // console.log("error: " + error)
+    // console.log("duration: " + duration)
+    // console.log("screenshot : " + screenshot)
 
     if (status === 'passed') this.testResults.passed++;
     if (status === 'failed') this.testResults.failed++;
@@ -218,6 +227,10 @@ class StatelessMCPRunner {
     });
     console.log("mcp result-> ")
     console.log(result)
+    // const textBlock1 = result.content.find(c => c.type === 'text')?.text;
+    // const match1 = textBlock1.match(/### Result\s+([^\n]+)/i);
+    // const value1 = match1[1].trim().toLowerCase();
+    // console.log("Value is" + value1)
     const duration = Date.now() - start;
 
     if (result.isError) {
@@ -230,11 +243,21 @@ class StatelessMCPRunner {
 
     // Check if result contains "false" in text content
     if (Array.isArray(result.content)) {
-      const textContent = result.content.find(c => c.type === 'text')?.text || '';
-      if (textContent.toLowerCase().includes('false')) {
-        const error = new Error(`MCP Tool returned false: ${textContent}`);
-        error.duration = duration;
-        throw error;
+      const textBlock = result.content.find(c => c.type === 'text')?.text;
+
+      if (textBlock) {
+        // Extract the Result section
+        const match = textBlock.match(/### Result\s+([^\n]+)/i);
+
+        if (match) {
+          const value = match[1].trim().toLowerCase();
+          // console.log(value)
+          if (value === 'false') {
+            const error = new Error(`MCP Tool returned false`);
+            error.duration = duration;
+            throw error;
+          }
+        }
       }
     }
 
@@ -250,41 +273,37 @@ class StatelessMCPRunner {
    * @throws {Error} If API call fails
    */
   async callLLM(messages, includeTools = false) {
-    if (!config.llm.apiKey) throw new Error('OPENAI_API_KEY not set');
-
-    const fetchFn = globalThis.fetch || (await import('node-fetch')).default;
-
-    const body = {
-      model: config.llm.model,
+    const requestConfig = {
+      model: this.llm,
       temperature: config.llm.temperature,
       messages
     };
 
     // Only include tools if explicitly requested (not needed for planning)
     if (includeTools) {
-      body.tools = this.generateMCPTools();
-      body.tool_choice = 'auto';
+      requestConfig.tools = this.generateMCPTools();
     }
 
-    const response = await fetchFn(
-      'https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.llm.apiKey}`
-      },
-      body: JSON.stringify(body)
-    });
+    const { text, toolCalls } = await generateText(requestConfig);
 
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
+    // Return in OpenAI message format for compatibility
+    const response = {
+      content: text,
+      tool_calls: toolCalls?.map(tc => ({
+        id: tc.toolCallId,
+        type: 'function',
+        function: {
+          name: tc.toolName,
+          arguments: JSON.stringify(tc.args)
+        }
+      }))
+    };
 
-    const json = await response.json();
-    return json.choices[0].message;
+    return response;
   }
 
-  /** The prompt is used exclusively during the planning phase and does NOT
+  /** 
+   * The prompt is used exclusively during the planning phase and does NOT
    * execute any tools or call the MCP layer.
    *
    * @param {string} testText
@@ -307,6 +326,7 @@ class StatelessMCPRunner {
 
     return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
     Do not try to improve the test steps, don't try to imporve the test. Don't skip any step, Don't repeat any step, Dont change the sequence of the steps.
+    You have to follow all the rules below strictly.
 
 ## INPUT CONTEXT
 1. **AVAILABLE TOOLS:**
@@ -329,6 +349,9 @@ ${testText}
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
 - **Data Extraction:** Extract values (selectors, text, numbers, logic) directly from the test step to populate the schema fields.
 - **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
+- **Ids, classes are not refs keep in mind that. If you select any tool which requires ref then you have to extract proper ref from the sanpshot, otherwise
+it will throw illegitimate erros.
+- **If you are a old model and facing problem to extracts refs then use those tools which not demands ref as parameter.
 
 ### 3. Step Classification
 - **Action:** If the step implies interaction (e.g., click, type, navigate, wait, scroll etc.), classify as \`isAssertion: false\`.
@@ -366,6 +389,7 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @throws {Error} If plan JSON is invalid
    */
   async generateExecutionPlan(testText, testSteps) {
+    log.llm(`Chosen LLM provider -> ${config.llm.provider}`);
     log.llm('Generating execution plan...');
 
     const planningPrompt = this.buildPlanningPrompt(testText, testSteps.length);
@@ -438,7 +462,7 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
 
 
         this.recordAction({
-          tool: step.tool,
+          tool: `mcp_${step.tool}`,
           params: step.params,
           status: 'passed',
           assertion: step.isAssertion || false,
@@ -453,7 +477,7 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
         log.error(`✗ Step ${i + 1} failed`, err.message);
 
         this.recordAction({
-          tool: step.tool,
+          tool: `mcp_${step.tool}`,
           params: step.params,
           status: 'failed',
           assertion: step.isAssertion || false,
@@ -494,29 +518,146 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
   }
 }
 
+/**
+ * Recursively finds all .yml and .yaml files in a directory
+ * 
+ * @param {string} dirPath - Directory path to scan
+ * @returns {Array<string>} Array of absolute file paths
+ */
+function getTestFiles(dirPath) {
+  const testFiles = [];
+
+  if (!fs.existsSync(dirPath)) {
+    throw new Error(`Path does not exist: ${dirPath}`);
+  }
+
+  const stats = fs.statSync(dirPath);
+
+  // If it's a file, return it directly
+  if (stats.isFile()) {
+    if (dirPath.endsWith('.yml') || dirPath.endsWith('.yaml')) {
+      return [path.resolve(dirPath)];
+    }
+    throw new Error(`File must be a .yml or .yaml file: ${dirPath}`);
+  }
+
+  // If it's a directory, scan for test files
+  if (stats.isDirectory()) {
+    const files = fs.readdirSync(dirPath);
+
+    for (const file of files) {
+      const fullPath = path.join(dirPath, file);
+      const fileStats = fs.statSync(fullPath);
+
+      if (fileStats.isFile() && (file.endsWith('.yml') || file.endsWith('.yaml'))) {
+        testFiles.push(path.resolve(fullPath));
+      }
+    }
+
+    return testFiles.sort(); // Sort alphabetically
+  }
+
+  return testFiles;
+}
+
 // ---------- MAIN EXECUTION ----------
 async function main() {
-  const testFile = process.argv[2];
-  if (!testFile || !fs.existsSync(testFile)) {
-    console.error('Usage: node direct_mcp_stateless.js <test.yml>');
+  const testPath = process.argv[2];
+
+  if (!testPath) {
+    console.error('Usage: node direct_mcp_stateless.js <test.yml | tests-folder>');
+    console.error('Examples:');
+    console.error('  node direct_mcp_stateless.js tests/test1.yml');
+    console.error('  node direct_mcp_stateless.js tests/');
     process.exit(1);
   }
 
-  const runner = new StatelessMCPRunner();
-
+  let testFiles;
   try {
-    await runner.initializeMCP();
-    await runner.runTest(
-      fs.readFileSync(testFile, 'utf8'),
-      path.basename(testFile)
-    );
-    log.success('TEST PASSED');
+    testFiles = getTestFiles(testPath);
   } catch (err) {
-    log.error('TEST FAILED', err.message);
+    log.error('Failed to load test files', err.message);
     process.exit(1);
-  } finally {
-    await runner.cleanup();
   }
+
+  if (testFiles.length === 0) {
+    log.error('No test files found in the specified path');
+    process.exit(1);
+  }
+
+  log.info(`Found ${testFiles.length} test file(s) to execute`);
+
+  const allResults = [];
+  let totalPassed = 0;
+  let totalFailed = 0;
+
+  for (let i = 0; i < testFiles.length; i++) {
+    const testFile = testFiles[i];
+    const testName = path.basename(testFile);
+
+    log.info(`\n${'='.repeat(60)}`);
+    log.info(`Executing test ${i + 1}/${testFiles.length}: ${testName}`);
+    log.info(`${'='.repeat(60)}\n`);
+
+    const runner = new StatelessMCPRunner();
+
+    try {
+      await runner.initializeMCP();
+      const result = await runner.runTest(
+        fs.readFileSync(testFile, 'utf8'),
+        testName
+      );
+
+      allResults.push({
+        testName,
+        status: 'PASSED',
+        passed: result.passed,
+        failed: result.failed
+      });
+
+      totalPassed++;
+      log.success(`✅ Test PASSED: ${testName}\n`);
+
+    } catch (err) {
+      allResults.push({
+        testName,
+        status: 'FAILED',
+        error: err.message
+      });
+
+      totalFailed++;
+      log.error(`❌ Test FAILED: ${testName}`, err.message + '\n');
+
+    } finally {
+      await runner.cleanup();
+    }
+  }
+
+  // Print summary
+  log.info(`\n${'='.repeat(60)}`);
+  log.info('TEST SUITE SUMMARY');
+  log.info(`${'='.repeat(60)}`);
+  log.info(`Total Tests: ${testFiles.length}`);
+  log.success(`Passed: ${totalPassed}`);
+  if (totalFailed > 0) {
+    log.error(`Failed: ${totalFailed}`, '');
+  }
+  log.info(`${'='.repeat(60)}\n`);
+
+  // Print individual results
+  allResults.forEach((result, idx) => {
+    const status = result.status === 'PASSED' ? '✅' : '❌';
+    console.log(`${status} ${idx + 1}. ${result.testName} - ${result.status}`);
+    if (result.error) {
+      console.log(`   Error: ${result.error}`);
+    }
+  });
+
+  if (totalFailed > 0) {
+    process.exit(1);
+  }
+
+  log.success('\n🎉 ALL TESTS PASSED');
 }
 
 // ---------- CLEANUP HANDLERS ----------

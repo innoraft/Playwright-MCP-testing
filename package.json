@@ -41,9 +41,16 @@
     "stateless:autonomous": "node direct_mcp_stateless.js tests/autonomous-complex.test.txt"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.1",
+    "@ai-sdk/cohere": "^3.0.1",
+    "@ai-sdk/google": "^3.0.1",
+    "@ai-sdk/groq": "^3.0.1",
+    "@ai-sdk/mistral": "^3.0.1",
+    "@ai-sdk/openai": "^3.0.1",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "@playwright/mcp": "^0.0.45",
-    "@playwright/test": "^1.40.0"
+    "@playwright/test": "^1.40.0",
+    "ai": "^6.0.3"
   },
   "engines": {
     "node": ">=16.0.0"
