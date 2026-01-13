@@ -118,7 +118,8 @@ test-results/
 
 # Test output directories (exclude all generated content)
 test-screenshots/
-uploads/
+mcp-workspace/uploads/*
+!mcp-workspace/uploads/.gitkeep
 test-reports/
 
 # Example/actual test files (users create their own)
