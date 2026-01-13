@@ -118,6 +118,7 @@ test-results/
 
 # Test output directories (exclude all generated content)
 test-screenshots/
+uploads/
 test-reports/
 
 # Example/actual test files (users create their own)
@@ -137,13 +138,12 @@ composer.lock
 recipes/
 
 # Test artifacts and cache
-config/
 fixtures/
 .test-cache/
 .playwright-mcp/
 mcp_test_recorder.js
 # Test artifacts and cache
-config/
+
 fixtures/
 .test-cache/
 .playwright-mcp/

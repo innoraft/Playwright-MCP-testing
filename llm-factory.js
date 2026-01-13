@@ -19,7 +19,7 @@ export function createLLM({ provider, apiKey }) {
   switch (provider) {
     case 'openai':
       const openaiProvider = createOpenAI({ apiKey: apiKey });
-      return openaiProvider('gpt-5');
+      return openaiProvider('gpt-5'); //If facing any problem or ambiguity, feel free to use `gpt5` instead of `gpt-5.1-codex-max`
 
     case 'gemini':
       const googleProvider = createGoogleGenerativeAI({ apiKey });

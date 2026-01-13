@@ -32,16 +32,30 @@ cd Playwright-MCP-testing
 npm install
 ```
 
-3. Set up your OpenAI API key:
+3. Set up your configuration:
+
+Open the configuration file:
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
+config/llm.config.js
+```
+
+Update it with your LLM provider and API key:
+
+```javascript
+const llmConfig = {
+  provider: 'openai',
+  apiKey: "your-api-key-here",
+  temperature: 1
+};
+
+export default llmConfig;
 ```
 
 ## 📝 Usage
 
 ### Basic Test Creation
 
-Create a test file (e.g., `tests/my-test.test.txt`) with natural language instructions:
+Create a test file (e.g., `tests/simple-test.test.yml`) with natural language instructions:
 
 ```
 Navigate to https://example.com
@@ -59,8 +73,13 @@ Take a screenshot of the dashboard
 Execute your test with:
 
 ```bash
-node mcp_llm_runner.js tests/my-test.test.txt
+node direct_mcp_stateless.js tests/simple-test.test.yml
 ```
+
+### Uploading media
+
+If you want to upload any files then at first place them inside the `/mcp-workspace/uploads/` directory
+Then use the absolute path to the test step e.g. `- Select the file from the system path '/home/abc/Desktop/playwright-mcp/mcp-workspace/uploads/abc.png'`
 
 ### Test Report
 
@@ -68,7 +87,7 @@ After execution, you'll get:
 - Detailed console output with step-by-step execution
 - HTML report with screenshots and analytics
 - Test reports saved in `test-reports/` directory
-- Screenshots saved in `test-screenshots/` directory
+- Screenshots saved in `/mcp-workspace/test-screenshots/` directory
 
 ## 🧪 Example Tests
 
@@ -119,16 +138,6 @@ The framework generates comprehensive reports including:
   }
 }
 ```
-
-### Framework Configuration
-
-Key configuration options in `mcp_llm_runner.js`:
-
-- **Browser Settings**: Headless mode, viewport size, timeout settings
-- **AI Model**: OpenAI model selection and parameters
-- **Reporting**: Output formats and detail levels
-- **Screenshots**: Automatic screenshot triggers and quality settings
-
 ## 🎯 Advanced Features
 
 ### Smart Element Detection
@@ -182,12 +191,72 @@ Built-in error handling and recovery mechanisms:
    ✅ Wait 3 seconds for animations to complete
    ```
 
+4. **Prefer Stable Selectors**: Use attributes that are less likely to change
+  ```
+  ✅ Click the button with id "submit-order"
+  ✅ Type "john" into the input with placeholder "Username"
+  ❌ Click the blue button on the right
+  ```
+
+5. **Use Placeholders and Labels When Possible**: These are more reliable than visual descriptions.
+  ```
+  ✅ Enter "john@example.com" in the input with placeholder "Email"
+  ✅ Type "admin" into the field labeled "Username"
+  ❌ Type into the first input box
+  ```
+
+6. **Avoid Position-Based Targeting**: UI layout can change; avoid relying on order.
+  ```
+  ❌ Click the second button
+  ❌ Select the third input field
+  ✅ Click the button with text "Save"
+  ```
+
+7. **Use Text Content for Buttons and Links**: Text is more stable than layout or styling.
+  ```
+  ✅ Click the "Login" button
+  ✅ Click the link "Forgot Password"
+  ❌ Click the top-right link
+  ```
+
+8. **Prefer IDs and Data Attributes When Available**: 
+  ```
+  ✅ Click the element with id "submitBtn"
+  ✅ Click the element with data-test-id "login-submit"
+  ❌ Click the green button
+  ```
+9. **Describe the Field Purpose, Not Its Appearance**:
+  ```
+  ✅ Enter "12345" in the ZIP code field
+  ❌ Enter "12345" in the small box on the left
+  ```
+
+10. **Be Explicit About Which Element You Mean When There Are Multiple Matches**:
+  ```
+  ✅ Click the "Edit" button for the user "John"
+  ❌ Click the "Edit" button
+  ```
+
+11. **Use Clear Assertion Targets**:
+  ```
+  ✅ Verify that the text "Order Placed" is visible
+  ✅ Verify that the URL contains "/dashboard"
+  ❌ Verify the page looks correct
+  ```
+
+12. **Avoid Vague Terms**:
+  ```
+  ❌ Click something
+  ❌ Enter some text
+  ✅ Click the "Checkout" button
+  ✅ Enter "98765" in the ZIP code field
+  ```
+
 ### Test Organization
 
 - Group related tests in logical directories
 - Use descriptive test file names
 - Include setup and teardown steps
-- Document complex test scenarios
 
 ## 🛡️ Error Handling
 
@@ -215,7 +284,7 @@ The framework provides detailed error reporting:
 
 Enable verbose logging:
 ```bash
-DEBUG=true node mcp_llm_runner.js tests/my-test.test.txt
+DEBUG=true node direct_mcp_stateless.js tests/my-test.test.yml
 ```
 
 ### Screenshot Analysis
@@ -260,54 +329,9 @@ npm run lint
 
 ### Core Functions
 
-- `runMcpActions(actions, context)`: Execute a sequence of browser actions with shared test context
-- `extractEvaluationResult(result)`: Parse test evaluation outcomes
-- `generateReport(report)`: Create comprehensive test reports
-- `findElementRef(snapshot, description)`: AI-powered element detection
-
-### Supported Actions
-
-- `browser_navigate`: Navigate to URLs
-- `browser_click`: Click elements
-- `browser_type`: Enter text
-- `browser_wait_for`: Wait for conditions
-- `browser_take_screenshot`: Capture screenshots
-- `browser_evaluate`: Execute JavaScript
-- `browser_snapshot`: Get page state
-
-## 🔗 Integration
-
-### CI/CD Integration
-
-Example GitHub Actions workflow:
-
-```yaml
-name: E2E Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      - run: npm install
-      - run: npm test
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-```
-
-### Docker Support
-
-```dockerfile
-FROM node:18
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-CMD ["npm", "test"]
-```
+- `generateExecutionPlan(testText, testSteps)`: Generates the execution plan by calling LLM
+- `runTest(testText, testName)`: PRuns the tools following the plan
+- `recordAction({ tool, params, status, assertion, error, duration, screenshot })`: Records the step is passed or failed
 
 ## 📄 License
 

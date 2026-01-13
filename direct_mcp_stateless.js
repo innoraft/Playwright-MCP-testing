@@ -34,7 +34,7 @@ const config = {
     viewport: { width: 1280, height: 720 }
   },
   reporting: {
-    screenshotsDir: 'test-screenshots',
+    screenshotsDir: 'mcp-workspace/test-screenshots',
     outputDir: 'test-reports'
   }
 };
@@ -120,15 +120,6 @@ class StatelessMCPRunner {
       timestamp: new Date()
     });
 
-    // console.log("tool:" + tool)
-    // console.log("param: ")
-    // console.log(params)
-    // console.log("status:" + status)
-    // console.log("assertion:" + assertion)
-    // console.log("error: " + error)
-    // console.log("duration: " + duration)
-    // console.log("screenshot : " + screenshot)
-
     if (status === 'passed') this.testResults.passed++;
     if (status === 'failed') this.testResults.failed++;
   }
@@ -141,20 +132,20 @@ class StatelessMCPRunner {
    * @throws {Error} If MCP connection fails
    */
   async initializeMCP() {
-    const screenshotsDir = path.resolve(config.reporting.screenshotsDir);
+    const workspaceDir = path.resolve('mcp-workspace');
+    const screenshotsDir = path.join(workspaceDir, 'test-screenshots');
+    const uploadsDir = path.join(workspaceDir, 'uploads');
 
-    if (!fs.existsSync(screenshotsDir)) {
-      fs.mkdirSync(screenshotsDir, { recursive: true });
-      log.info(`Created screenshots directory: ${screenshotsDir}`);
-    }
+    fs.mkdirSync(screenshotsDir, { recursive: true });
+    fs.mkdirSync(uploadsDir, { recursive: true });
 
     const transport = new StdioClientTransport({
       command: 'npx',
-      cwd: screenshotsDir,
+      cwd: workspaceDir,
       args: [
         '@playwright/mcp@latest',
         '--ignore-https-errors',
-        '--output-dir', screenshotsDir,
+        '--output-dir', 'test-screenshots',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
@@ -227,17 +218,13 @@ class StatelessMCPRunner {
     });
     console.log("mcp result-> ")
     console.log(result)
-    // const textBlock1 = result.content.find(c => c.type === 'text')?.text;
-    // const match1 = textBlock1.match(/### Result\s+([^\n]+)/i);
-    // const value1 = match1[1].trim().toLowerCase();
-    // console.log("Value is" + value1)
     const duration = Date.now() - start;
 
     if (result.isError) {
       // Don't record here, just throw with context
       const error = new Error(`MCP Tool Error: ${JSON.stringify(result.content)}`);
       error.duration = duration;
-      console.log(" i am from executemcp->", error)
+      log.error("Error while mcp execution-> ", error)
       throw error;
     }
 
@@ -284,9 +271,19 @@ class StatelessMCPRunner {
       requestConfig.tools = this.generateMCPTools();
     }
 
-    const { text, toolCalls } = await generateText(requestConfig);
+    const { text, toolCalls, usage } = await generateText(requestConfig);
 
-    // Return in OpenAI message format for compatibility
+    // ---- TOKEN LOGGING (PER FILE) ----
+    if (usage) {
+      console.log('🔍 Full Usage Object:', JSON.stringify(usage, null, 2));
+      log.info('📊 LLM Token Usage', {
+        prompt: usage.promptTokens,
+        completion: usage.completionTokens,
+        total: usage.totalTokens
+      });
+    }
+
+    // Attach usage so caller (runner/report) can access it
     const response = {
       content: text,
       tool_calls: toolCalls?.map(tc => ({
@@ -296,7 +293,8 @@ class StatelessMCPRunner {
           name: tc.toolName,
           arguments: JSON.stringify(tc.args)
         }
-      }))
+      })),
+      _usage: usage || null
     };
 
     return response;
@@ -344,6 +342,8 @@ ${testText}
 - **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
 - **Dont send invalid json.
 - **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
+IMPORTANT: For steps that involve alerts, confirms, or prompts, you MUST use the "browser_handle_dialog" tool. 
+Do NOT use "browser_run_code" for modal dialogs.
 
 ### 2. Parameter Generation (Schema Compliance)
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
@@ -362,6 +362,19 @@ it will throw illegitimate erros.
   - Generate self-contained, synchronous code.
   - The code must implement the logic described in the test step.
   - Do not assume the existence of external variables.
+  - The code must be a pure function body passed to Playwright.
+  - NEVER invoke the function (no trailing () ).
+  - NEVER return an executed expression.
+  - The value sent to MCP must be a function reference, not its result.
+  - Valid: "() => { return true; }"
+  - Invalid: "(() => { return true; })()"
+  - Do NOT wrap functions in quotes that execute immediately.
+  - The MCP tool will execute the function, you must only define it.
+
+### 5. Generated code re-check
+- Re check all the codes you generated with the valid standard for the dedicated mcp tools.
+- Mistakes will cause critical errors as there is no second chance, so re check the codes you have generated.
+- If you think any mistake is there you can rewrite the codes.
 
 ## OUTPUT FORMAT
 Return a **SINGLE VALID JSON ARRAY**. Do not include markdown formatting, code blocks, or explanatory text outside the array.
