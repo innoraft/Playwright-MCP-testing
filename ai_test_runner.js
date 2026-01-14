@@ -7,7 +7,7 @@
  * • Full MCP integration for browser automation
  * • Minimal, production-ready design
  * 
- * Usage: node direct_mcp_stateless.js tests/example.test.yml
+ * Usage: node ai_test_runner.js tests/example.test.yml
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -27,6 +27,7 @@ const config = {
   llm: {
     provider: llmConfig.provider,
     apiKey: llmConfig.apiKey,
+    model: llmConfig.model,
     temperature: 1
   },
   browser: {
@@ -34,7 +35,7 @@ const config = {
     viewport: { width: 1280, height: 720 }
   },
   reporting: {
-    screenshotsDir: 'mcp-workspace/test-screenshots',
+    screenshotsDir: 'mcp-workspace/screenshots',
     outputDir: 'test-reports'
   }
 };
@@ -63,6 +64,7 @@ class StatelessMCPRunner {
     this.testReport = null;
     this.llm = createLLM({
       provider: config.llm.provider,
+      model: config.llm.model,
       apiKey: config.llm.apiKey
     });
   }
@@ -133,7 +135,7 @@ class StatelessMCPRunner {
    */
   async initializeMCP() {
     const workspaceDir = path.resolve('mcp-workspace');
-    const screenshotsDir = path.join(workspaceDir, 'test-screenshots');
+    const screenshotsDir = path.join(workspaceDir, 'screenshots');
     const uploadsDir = path.join(workspaceDir, 'uploads');
 
     fs.mkdirSync(screenshotsDir, { recursive: true });
@@ -145,7 +147,7 @@ class StatelessMCPRunner {
       args: [
         '@playwright/mcp@latest',
         '--ignore-https-errors',
-        '--output-dir', 'test-screenshots',
+        '--output-dir', 'screenshots',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
@@ -314,7 +316,7 @@ class StatelessMCPRunner {
    *   A fully constructed system prompt instructing the LLM to generate
    *   a strict, ordered execution plan as valid JSON.
    */
-  buildPlanningPrompt(testText, stepCount) {
+  buildSystemPrompt(testText, stepCount) {
     // Dynamically inject tool definitions
     const toolsInfo = Array.from(this.mcpTools.values()).map(tool => ({
       name: tool.name, // Ensure this is the exact string needed to call the tool
@@ -403,9 +405,10 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    */
   async generateExecutionPlan(testText, testSteps) {
     log.llm(`Chosen LLM provider -> ${config.llm.provider}`);
+    log.llm(`Chosen Model -> ${config.llm.model} `)
     log.llm('Generating execution plan...');
 
-    const planningPrompt = this.buildPlanningPrompt(testText, testSteps.length);
+    const planningPrompt = this.buildSystemPrompt(testText, testSteps.length);
 
     const response = await this.callLLM([
       { role: 'system', content: planningPrompt },
@@ -578,10 +581,10 @@ async function main() {
   const testPath = process.argv[2];
 
   if (!testPath) {
-    console.error('Usage: node direct_mcp_stateless.js <test.yml | tests-folder>');
+    console.error('Usage: node ai_test_runner.js <test.yml | tests-folder>');
     console.error('Examples:');
-    console.error('  node direct_mcp_stateless.js tests/test1.yml');
-    console.error('  node direct_mcp_stateless.js tests/');
+    console.error('  node ai_test_runner.js tests/test1.yml');
+    console.error('  node ai_test_runner.js tests/');
     process.exit(1);
   }
 

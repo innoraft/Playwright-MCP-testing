@@ -3,11 +3,11 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 /**
  * Centralized LLM factory
- * - Only accepts provider + apiKey
- * - Model selection is fully locked here
- * - Prevents misconfiguration and downgrade
+ * - Provider + API key required
+ * - Model is provided dynamically via config
+ * - Safe defaults per provider
  */
-export function createLLM({ provider, apiKey }) {
+export function createLLM({ provider, apiKey, model }) {
   if (!provider) {
     throw new Error('LLM provider is required');
   }
@@ -17,13 +17,21 @@ export function createLLM({ provider, apiKey }) {
   }
 
   switch (provider) {
-    case 'openai':
-      const openaiProvider = createOpenAI({ apiKey: apiKey });
-      return openaiProvider('gpt-5'); //If facing any problem or ambiguity, feel free to use `gpt5` instead of `gpt-5.1-codex-max`
+    case 'openai': {
+      const openaiProvider = createOpenAI({ apiKey });
 
-    case 'gemini':
+      return openaiProvider(
+        model || 'gpt-5'
+      );
+    }
+
+    case 'gemini': {
       const googleProvider = createGoogleGenerativeAI({ apiKey });
-      return googleProvider('gemini-2.5-flash');
+
+      return googleProvider(
+        model || 'gemini-2.5-flash'
+      );
+    }
 
     default:
       throw new Error(`Unsupported provider: ${provider}`);

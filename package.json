@@ -35,10 +35,10 @@
     "direct": "node direct_mcp_simple.js",
     "direct:simple": "node direct_mcp_simple.js tests/simple-test.test.txt",
     "direct:navigation": "node direct_mcp_simple.js tests/simple-navigation.test.txt",
-    "stateless": "node direct_mcp_stateless.js",
-    "stateless:simple": "node direct_mcp_stateless.js tests/simple-test.test.yml",
-    "stateless:alerts": "node direct_mcp_stateless.js tests/alerts-javascript.test.yml",
-    "stateless:autonomous": "node direct_mcp_stateless.js tests/autonomous-complex.test.txt"
+    "stateless": "node ai_test_runner.js",
+    "stateless:simple": "node ai_test_runner.js tests/simple-test.test.yml",
+    "stateless:alerts": "node ai_test_runner.js tests/alerts-javascript.test.yml",
+    "stateless:autonomous": "node ai_test_runner.js tests/autonomous-complex.test.txt"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.1",

@@ -1,5 +1,6 @@
 const llmConfig = {
-  provider: 'openai',
+  provider: 'provider-name',
+  model: 'model-name',
   apiKey:"api-key-here",
   temperature: 1
 };

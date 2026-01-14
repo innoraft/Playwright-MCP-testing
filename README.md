@@ -73,7 +73,7 @@ Take a screenshot of the dashboard
 Execute your test with:
 
 ```bash
-node direct_mcp_stateless.js tests/simple-test.test.yml
+node ai_test_runner.js tests/simple-test.test.yml
 ```
 
 ### Uploading media
@@ -284,7 +284,7 @@ The framework provides detailed error reporting:
 
 Enable verbose logging:
 ```bash
-DEBUG=true node direct_mcp_stateless.js tests/my-test.test.yml
+DEBUG=true node ai_test_runner.js tests/my-test.test.yml
 ```
 
 ### Screenshot Analysis
