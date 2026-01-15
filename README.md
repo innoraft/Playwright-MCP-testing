@@ -78,8 +78,8 @@ node ai_test_runner.js tests/simple-test.test.yml
 
 ### Uploading media
 
-If you want to upload any files then at first place them inside the `/mcp-workspace/uploads/` directory
-Then use the absolute path to the test step e.g. `- Select the file from the system path '/home/abc/Desktop/playwright-mcp/mcp-workspace/uploads/abc.png'`
+If you want to upload any files then at first place them inside the `/files/uploads/` directory
+Then use the absolute path to the test step e.g. `- Select the file from the system path '/home/abc/Desktop/playwright-mcp/files/uploads/abc.png'`
 
 ### Test Report
 
@@ -87,7 +87,7 @@ After execution, you'll get:
 - Detailed console output with step-by-step execution
 - HTML report with screenshots and analytics
 - Test reports saved in `test-reports/` directory
-- Screenshots saved in `/mcp-workspace/test-screenshots/` directory
+- Screenshots saved in `/files/test-screenshots/` directory
 
 ## 🧪 Example Tests
 

@@ -35,7 +35,7 @@ const config = {
     viewport: { width: 1280, height: 720 }
   },
   reporting: {
-    screenshotsDir: 'mcp-workspace/screenshots',
+    screenshotsDir: 'files/screenshots',
     outputDir: 'test-reports'
   }
 };
@@ -134,7 +134,7 @@ class StatelessMCPRunner {
    * @throws {Error} If MCP connection fails
    */
   async initializeMCP() {
-    const workspaceDir = path.resolve('mcp-workspace');
+    const workspaceDir = path.resolve('files');
     const screenshotsDir = path.join(workspaceDir, 'screenshots');
     const uploadsDir = path.join(workspaceDir, 'uploads');
 

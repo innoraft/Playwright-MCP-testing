@@ -22,8 +22,8 @@ test-reports/
 # Uploads (runtime only)
 # Keep directory structure
 # --------------------
-mcp-workspace/uploads/*
-!mcp-workspace/uploads/.gitkeep
+files/uploads/*
+!files/uploads/.gitkeep
 
 # --------------------
 # Cache / temp
