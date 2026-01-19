@@ -688,7 +688,13 @@ process.on('unhandledRejection', (err) => {
 });
 
 // ---------- RUN ----------
-main().catch((err) => {
-  log.error('Fatal error', err);
-  process.exit(1);
-});
+// Export public APIs so this runner can be reused or extended
+export { StatelessMCPRunner, log, config };
+
+// Only execute main() when this file is run directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    log.error('Fatal error', err);
+    process.exit(1);
+  });
+}

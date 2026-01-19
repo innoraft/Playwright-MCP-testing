@@ -44,6 +44,7 @@ Update it with your LLM provider and API key:
 ```javascript
 const llmConfig = {
   provider: 'openai',
+   model: '', //Use new models, (e.g.: For openai, use gpt-5.1-codex-max. If facing any problem use gpt-5.)
   apiKey: "your-api-key-here",
   temperature: 1
 };
