@@ -1,6 +1,11 @@
 /**
  * Test Report Generator
  * Handles creation of HTML test reports for autonomous LLM-MCP tests
+ * 
+ * Features:
+ * - HTML reports with embedded screenshots
+ * - Responsive design with modal image viewing
+ * - Detailed test metrics and action tracking
  */
 
 import fs from 'fs';
@@ -9,6 +14,13 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export class TestReportGenerator {
+  /**
+   * Creates an instance of TestReportGenerator.
+   * @param {Object} config - Configuration object
+   * @param {Object} config.reporting - Reporting configuration
+   * @param {string} config.reporting.outputDir - Directory for generated HTML reports
+   * @param {string} config.reporting.screenshotsDir - Directory for screenshots
+   */
   constructor(config) {
     this.config = config || {
       reporting: {
@@ -19,35 +31,17 @@ export class TestReportGenerator {
     this.screenshotCounter = 0;
   }
 
-  generateScreenshotName(testName, actionIndex, actionType = 'action') {
-    const sanitizedTestName = testName.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
-    const paddedIndex = String(actionIndex + 1).padStart(2, '0');
-    const timestamp = Date.now();
-    return `${sanitizedTestName}_action${paddedIndex}_${actionType}_${timestamp}.png`;
-  }
-
-  extractActionType(action) {
-    if (!action.tool) return 'unknown';
-    const toolTypeMap = {
-      'browser_navigate': 'navigation',
-      'browser_click': 'click',
-      'browser_type': 'type',
-      'browser_fill_form': 'form',
-      'browser_select_option': 'select',
-      'browser_wait_for': 'wait',
-      'browser_evaluate': 'evaluate',
-      'browser_snapshot': 'snapshot',
-      'browser_take_screenshot': 'screenshot',
-      'browser_hover': 'hover',
-      'browser_drag': 'drag',
-      'browser_press_key': 'key',
-      'browser_handle_dialog': 'dialog',
-      'visual_regression_check': 'visual-regression'
-    };
-    const cleanTool = action.tool.replace(/^mcp_/, '');
-    return toolTypeMap[cleanTool] || cleanTool.replace('browser_', '');
-  }
-
+  /**
+   * Generates a complete test report with HTML output and embedded media.
+   * @param {Object} testReport - The test report data containing actions and results
+   * @param {number} testReport.startTime - Test start timestamp
+   * @param {Array} testReport.actions - Array of action objects with results
+   * @param {number} testReport.passedActions - Number of passed actions
+   * @param {number} testReport.failedActions - Number of failed actions
+   * @param {number} testReport.totalActions - Total number of actions
+   * 
+   * @returns {Object} Object containing htmlReport path and updated testReport
+   */
   generateReport(testReport) {
     testReport.endTime = new Date();
     testReport.duration = testReport.endTime - testReport.startTime;
@@ -68,11 +62,20 @@ export class TestReportGenerator {
     return { htmlReport: htmlReportFile, testReport };
   }
 
+  /**
+   * Ensures all required directories exist, creating them if necessary.
+   * Creates output and screenshots directories.
+   */
   ensureDirectories() {
     fs.mkdirSync(this.config.reporting.outputDir, { recursive: true });
     fs.mkdirSync(this.config.reporting.screenshotsDir, { recursive: true });
   }
 
+  /**
+   * Logs a summary of the generated test report to the console.
+   * @param {Object} testReport - The test report data
+   * @param {string} htmlReportFile - Path to the generated HTML report file
+   */
   logReportGeneration(testReport, htmlReportFile) {
     console.log('\n📊 Test Report Generated:');
     console.log(`🌐 HTML Report: ${htmlReportFile}`);
@@ -83,8 +86,11 @@ export class TestReportGenerator {
   }
 
   /**
-   * Embed any image by its absolute or relative path.
-   * Works for screenshots, baselines, and diffs — not just the screenshots dir.
+   * Embeds any image as base64 data URI by its absolute or relative path.
+   * Works for screenshots, baselines, and diffs from any directory.
+   * @param {string} imagePath - Absolute or relative path to the image file
+   * 
+   * @returns {string|null} Base64 data URI string or null if image not found/error
    */
   embedImageFromPath(imagePath) {
     if (!imagePath) return null;
@@ -111,17 +117,35 @@ export class TestReportGenerator {
     }
   }
 
+  /**
+   * Embeds a screenshot from the configured screenshots directory as a base64 data URI.
+   * @param {string} filename - Name of the screenshot file
+   * 
+   * @returns {string|null} Base64 data URI string or null if file not found/error
+   */
   embedScreenshot(filename) {
     const screenshotPath = path.join(this.config.reporting.screenshotsDir, filename);
     return this.embedImageFromPath(screenshotPath);
   }
 
+  /**
+   * Finds all screenshot files in the configured screenshots directory.
+   * 
+   * @returns {Array<string>} Array of screenshot filenames
+   */
   findScreenshots() {
     if (!fs.existsSync(this.config.reporting.screenshotsDir)) return [];
     return fs.readdirSync(this.config.reporting.screenshotsDir)
       .filter(f => f.match(/\.(png|jpg|jpeg)$/i));
   }
 
+  /**
+   * Generates a complete HTML report as a string.
+   * Includes embedded images, styling, and interactive functionality.
+   * @param {Object} testReport - The test report data containing all actions and results
+   * 
+   * @returns {string} HTML document as a string
+   */
   generateHTMLReport(testReport) {
     const successRate = testReport.totalActions > 0
       ? ((testReport.passedActions / testReport.totalActions) * 100).toFixed(1)
@@ -170,7 +194,6 @@ export class TestReportGenerator {
   <title>Autonomous LLM-MCP Test Report</title>
   <style>
     ${css}
-    ${this.getVisualRegressionCSS()}
   </style>
 </head>
 <body>
@@ -195,97 +218,16 @@ export class TestReportGenerator {
   }
 
   /**
-   * Extra CSS for visual regression panels
-   */
-  getVisualRegressionCSS() {
-    return `
-      .vr-panel-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 12px;
-        margin-top: 12px;
-      }
-      .vr-panel {
-        display: flex;
-        flex-direction: column;
-        border-radius: 8px;
-        overflow: hidden;
-        border: 1px solid #e5e7eb;
-      }
-      .vr-panel-label {
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        padding: 6px 10px;
-        text-align: center;
-      }
-      .vr-panel-label.reference { background: #dbeafe; color: #1d4ed8; }
-      .vr-panel-label.actual    { background: #dcfce7; color: #15803d; }
-      .vr-panel-label.diff      { background: #fee2e2; color: #b91c1c; }
-      .vr-panel-label.diff.pass { background: #f0fdf4; color: #15803d; }
-      .vr-panel img {
-        width: 100%;
-        cursor: pointer;
-        display: block;
-        transition: opacity 0.2s;
-      }
-      .vr-panel img:hover { opacity: 0.85; }
-      .vr-no-image {
-        height: 80px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: #f9fafb;
-        color: #9ca3af;
-        font-size: 12px;
-      }
-      .vr-score-bar {
-        margin-top: 10px;
-        background: #f3f4f6;
-        border-radius: 999px;
-        height: 10px;
-        overflow: hidden;
-      }
-      .vr-score-fill {
-        height: 100%;
-        border-radius: 999px;
-        transition: width 0.4s ease;
-      }
-      .vr-score-fill.pass { background: #22c55e; }
-      .vr-score-fill.fail { background: #ef4444; }
-      .vr-meta {
-        display: flex;
-        gap: 16px;
-        flex-wrap: wrap;
-        margin-top: 8px;
-        font-size: 13px;
-      }
-      .vr-meta span { color: #6b7280; }
-      .vr-meta strong { color: #111827; }
-      .vr-badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .vr-badge.pass { background: #dcfce7; color: #15803d; }
-      .vr-badge.fail { background: #fee2e2; color: #b91c1c; }
-      .vr-baseline-notice {
-        margin-top: 10px;
-        padding: 10px 14px;
-        background: #eff6ff;
-        border: 1px solid #bfdbfe;
-        border-radius: 6px;
-        color: #1d4ed8;
-        font-size: 13px;
-      }
-    `;
-  }
-
-  /**
-   * Renders the 3-panel visual regression section for a step.
+   * Generates the 3-panel visual regression display section for an action.
+   * Shows reference, actual, and diff images with metadata and scoring.
+   * @param {Object} action - The action object with visual regression results
+   * @param {Object} action.visualResult - Visual regression result data
+   * @param {string} action.vrReferenceBase64 - Base64 reference image
+   * @param {string} action.vrActualBase64 - Base64 actual screenshot
+   * @param {string} action.vrDiffBase64 - Base64 diff visualization
+   * @param {number} idx - Index of the action in the timeline
+   * 
+   * @returns {string} HTML section for visual regression display
    */
   generateVisualRegressionSection(action, idx) {
     const vr = action.visualResult;
@@ -361,6 +303,12 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Generates the header section of the HTML report.
+   * @param {Object} testReport - The test report data
+   * 
+   * @returns {string} HTML header section
+   */
   generateReportHeader(testReport) {
     return `
       <div class="header">
@@ -369,6 +317,14 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Generates the statistics grid section showing key metrics.
+   * @param {Object} testReport - The test report data
+   * @param {string|number} successRate - Success rate percentage
+   * @param {Function} formatDuration - Function to format duration values
+   * 
+   * @returns {string} HTML statistics grid section
+   */
   generateStatsGrid(testReport, successRate, formatDuration) {
     const testResult = testReport.testResult || 'unknown';
     const testResultClass = testResult === 'pass' ? 'success' : 'failure';
@@ -411,6 +367,13 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Generates the progress chart showing pass/fail ratio.
+   * @param {Object} testReport - The test report data
+   * @param {string|number} successRate - Success rate percentage
+   * 
+   * @returns {string} HTML progress chart section
+   */
   generateProgressChart(testReport, successRate) {
     return `
       <div class="chart-container">
@@ -428,6 +391,14 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Formats data objects into HTML-safe display strings.
+   * Handles strings, numbers, arrays, and nested objects with proper formatting.
+   * @param {*} data - Data to format (any type)
+   * @param {number} [indentLevel=0] - Current indentation level for nested objects
+   * 
+   * @returns {string} Formatted HTML string representation of the data
+   */
   formatData(data, indentLevel = 0) {
     if (!data) return '<em>None</em>';
     const indent = '  '.repeat(indentLevel);
@@ -452,6 +423,13 @@ export class TestReportGenerator {
     return String(data);
   }
 
+  /**
+   * Generates the action timeline section showing all actions with details.
+   * Includes filtering, expandable sections, and embedded media.
+   * @param {Array} actionsWithScreenshots - Array of action objects with embedded screenshots
+   * 
+   * @returns {string} HTML timeline section
+   */
   generateTimeline(actionsWithScreenshots) {
     return `
       <div class="timeline">
@@ -527,6 +505,12 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Generates the footer section with metadata and timing information.
+   * @param {Object} testReport - The test report data
+   * 
+   * @returns {string} HTML footer section
+   */
   generateFooter(testReport) {
     return `
       <div class="footer">
@@ -542,6 +526,12 @@ export class TestReportGenerator {
       </div>`;
   }
 
+  /**
+   * Generates the JavaScript code for interactive report features.
+   * Handles action filtering, modal image viewing, and expand/collapse functionality.
+   * 
+   * @returns {string} JavaScript code as a string
+   */
   getReportJavaScript() {
     return `
       function toggleAction(idx) {
