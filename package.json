@@ -25,6 +25,9 @@
   },
   "homepage": "https://github.com/innoraft/Playwright-MCP-testing#readme",
   "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "node server/index.js",
     "test": "node mcp_llm_runner.js tests/simple-test.test.txt",
     "test:all": "for file in tests/*.test.txt; do echo \"Running $file\"; node mcp_llm_runner.js \"$file\"; done",
     "test:simple": "node mcp_llm_runner.js tests/simple-test.test.txt",
@@ -51,6 +54,9 @@
     "@playwright/mcp": "^0.0.45",
     "@playwright/test": "^1.40.0",
     "ai": "^6.0.3",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "pixelmatch": "^7.1.0",
     "pngjs": "^7.0.0"
   },

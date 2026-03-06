@@ -43,3 +43,6 @@ temp/
 .idea/
 *.swp
 *~
+
+# config
+config/llm.config.json
