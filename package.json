@@ -50,7 +50,9 @@
     "@modelcontextprotocol/sdk": "^1.20.0",
     "@playwright/mcp": "^0.0.45",
     "@playwright/test": "^1.40.0",
-    "ai": "^6.0.3"
+    "ai": "^6.0.3",
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0"
   },
   "engines": {
     "node": ">=16.0.0"

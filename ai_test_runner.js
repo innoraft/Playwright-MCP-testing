@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
 import llmConfig from './config/llm.config.js';
+import { VisualRegressionChecker } from './visual-regression.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +68,8 @@ class StatelessMCPRunner {
       model: config.llm.model,
       apiKey: config.llm.apiKey
     });
+
+    this.visualChecker = new VisualRegressionChecker();
   }
 
   /**
@@ -79,7 +82,6 @@ class StatelessMCPRunner {
   extractScreenshotPath(result) {
     if (!result || !Array.isArray(result.content)) return null;
 
-    // Collect ALL text output
     const fullText = result.content
       .filter(c => c.type === 'text' && typeof c.text === 'string')
       .map(c => c.text)
@@ -87,14 +89,23 @@ class StatelessMCPRunner {
 
     if (!fullText) return null;
 
-    // Match any image filename Playwright might emit
     const matches = fullText.match(/([^\s"'()]+?\.(png|jpg|jpeg))/gi);
     if (!matches || matches.length === 0) return null;
 
-    // Return LAST screenshot (most relevant)
     const filename = path.basename(matches[matches.length - 1]);
 
-    return path.join(config.reporting.screenshotsDir, filename);
+    // Preferred path (where browser_take_screenshot saves)
+    const screenshotsPath = path.join(config.reporting.screenshotsDir, filename);
+    // Fallback path (where browser_run_code saves)
+    const filesRootPath = path.join('files', filename);
+
+    // If the file landed in /files root, move it to /files/screenshots
+    if (!fs.existsSync(screenshotsPath) && fs.existsSync(filesRootPath)) {
+      fs.renameSync(filesRootPath, screenshotsPath);
+      log.info(`Moved screenshot from /files to /files/screenshots: ${filename}`);
+    }
+
+    return screenshotsPath;
   }
 
   /**
@@ -110,7 +121,7 @@ class StatelessMCPRunner {
    * @param {number} action.duration - Execution time in milliseconds
    * @param {string|null} [action.screenshot] - Screenshot path if captured
    */
-  recordAction({ tool, params, status, assertion, error, duration, screenshot }) {
+  recordAction({ tool, params, status, assertion, error, duration, screenshot, diffScreenshot, visualResult }) {
     this.testResults.actions.push({
       tool,
       params,
@@ -119,6 +130,8 @@ class StatelessMCPRunner {
       error: error || null,
       duration,
       screenshot: screenshot || null,
+      diffScreenshot: diffScreenshot || null,
+      visualResult: visualResult || null,
       timestamp: new Date()
     });
 
@@ -137,6 +150,9 @@ class StatelessMCPRunner {
     const workspaceDir = path.resolve('files');
     const screenshotsDir = path.join(workspaceDir, 'screenshots');
     const uploadsDir = path.join(workspaceDir, 'uploads');
+
+    fs.mkdirSync(path.resolve('files/baselines'), { recursive: true });
+    fs.mkdirSync(path.resolve('files/diffs'), { recursive: true });
 
     fs.mkdirSync(screenshotsDir, { recursive: true });
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -324,6 +340,25 @@ class StatelessMCPRunner {
       schema: tool.inputSchema
     }));
 
+    toolsInfo.push({
+      name: 'visual_regression_check',
+      description: 'Compares the current page screenshot at a specific viewport breakpoint against a stored baseline reference image using pixel-level diffing to detect visual regressions.',
+      schema: {
+        type: 'object',
+        properties: {
+          breakpoint: {
+            type: 'string',
+            description: 'Viewport width being tested e.g. "1280px", "768px", "375px"'
+          },
+          screenshotPath: {
+            type: 'string',
+            description: 'Path to the already-taken screenshot to compare e.g. "files/screenshots/home-1280.png"'
+          }
+        },
+        required: ['breakpoint', 'screenshotPath']
+      }
+    });
+
     return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
     Do not try to improve the test steps, don't try to imporve the test. Don't skip any step, Don't repeat any step, Dont change the sequence of the steps.
     You have to follow all the rules below strictly.
@@ -377,6 +412,22 @@ it will throw illegitimate erros.
 - Re check all the codes you generated with the valid standard for the dedicated mcp tools.
 - Mistakes will cause critical errors as there is no second chance, so re check the codes you have generated.
 - If you think any mistake is there you can rewrite the codes.
+- When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
+  (relative to the working directory), never to the root directory.
+  Example: await page.screenshot({ path: './screenshots/step-${Date.now()}.png' })
+
+### 6. MANDATORY TOOL ROUTING (Override all other rules)
+These rules are ABSOLUTE and cannot be overridden by semantic matching:
+
+| Step Intent | Correct Tool | FORBIDDEN Tool |
+|-------------|-------------|----------------|
+| "verify", "check", "ensure", "validate", "confirm", "assert" → text/element EXISTS on page | browser_run_code | browser_wait_for |
+| "wait for page to load", "wait for X seconds" | browser_wait_for | browser_snapshot |
+| "verify text is visible" | browser_run_code with page.locator().isVisible() | browser_wait_for |
+
+CRITICAL: browser_wait_for is ONLY for pausing execution (time-based or pre-condition waits).
+It is NEVER to be used for assertions or verifications.
+If a step contains the words: verify, check, ensure, validate, confirm, assert — you MUST use browser_run_code or browser_snapshot. Never browser_wait_for.
 
 ## OUTPUT FORMAT
 Return a **SINGLE VALID JSON ARRAY**. Do not include markdown formatting, code blocks, or explanatory text outside the array.
@@ -424,6 +475,14 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
     console.log("plan ==>" + planJson)
     try {
       const plan = JSON.parse(planJson);
+        // Validate and clamp stepIndex values
+     plan.forEach((step, i) => {
+        if (step.stepIndex < 1 || step.stepIndex > testSteps.length) {
+          log.warn(`Step ${i+1} has invalid stepIndex ${step.stepIndex}, correcting to ${i+1}`);
+          step.stepIndex = i + 1; // fallback to sequential
+        }
+      });
+
       log.success(`Generated plan with ${plan.length} steps`);
       return plan;
     } catch (err) {
@@ -465,12 +524,59 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
     // Execute plan sequentially without additional LLM calls
     for (let i = 0; i < executionPlan.length; i++) {
       const step = executionPlan[i];
-      const originalStep = testSteps[step.stepIndex - 1] || testSteps[i];
+      const originalStep = step.description || testSteps[step.stepIndex - 1] || testSteps[i];
 
       log.info(`\n📍 Step ${i + 1}/${executionPlan.length}: ${originalStep.trim()}`);
 
-
       const toolName = step.tool.replace(/^mcp_/, '');
+
+      if (toolName === 'visual_regression_check') {
+        const { breakpoint, screenshotPath } = step.params;
+        const start = Date.now();
+
+        try {
+          const result = this.visualChecker.runRegressionStep(
+            testName,
+            breakpoint,
+            screenshotPath
+          );
+
+          const duration = Date.now() - start;
+
+          this.recordAction({
+            tool: 'visual_regression_check',
+            params: step.params,
+            status: result.passed ? 'passed' : 'failed',
+            assertion: true,
+            error: result.passed ? null : result.summary,
+            duration,
+            screenshot: screenshotPath,
+            diffScreenshot: result.diffPath || null,
+            visualResult: result
+          });
+
+          if (result.passed) {
+            log.success(`Visual regression passed at ${breakpoint} — ${result.mismatchPercent}% mismatch`);
+          } else {
+            log.error(`Visual regression FAILED at ${breakpoint}`, result.summary);
+            log.info(`Diff saved at: ${result.diffPath}`);
+          }
+
+        } catch (err) {
+          this.recordAction({
+            tool: 'visual_regression_check',
+            params: step.params,
+            status: 'failed',
+            assertion: true,
+            error: err.message,
+            duration: Date.now() - start,
+            screenshot: screenshotPath
+          });
+          log.error('Visual regression error', err.message);
+        }
+
+        continue; // Skip executeMCP for this custom-tool
+      }
 
       try {
         const { result, duration } = await this.executeMCP(toolName, step.params);

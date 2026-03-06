@@ -19,11 +19,14 @@ screenshots/
 test-reports/
 
 # --------------------
-# Uploads (runtime only)
+# files (runtime only)
 # Keep directory structure
 # --------------------
 files/uploads/*
 !files/uploads/.gitkeep
+files/baselines/*
+!files/baselines/.gitkeep
+files/diffs/*
 
 # --------------------
 # Cache / temp
