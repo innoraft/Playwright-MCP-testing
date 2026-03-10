@@ -54,14 +54,15 @@ Provide two distinct test authoring experiences — a general test form for flex
 
 **As a** QA Engineer,  
 **I want** a separate, simpler form where I only provide a URL and upload a reference image,  
-**So that** I can set up a visual regression test quickly without dealing with viewports, paths, or any technical fields.
+**So that** I can set up a visual regression test quickly without dealing with filenames, paths, or any technical fields.
 
 **Acceptance Criteria:**
 - [ ] A dedicated Visual Regression form is available as a separate tab or section
-- [ ] Form has a repeatable group with two fields: URL (text field) and Reference Image (file upload)
+- [ ] Form has a repeatable group with the fields: URL (text field), breakpoint height and width, Reference Image (file upload)
 - [ ] An "Add More" button allows adding multiple URL + Reference Image instances
 - [ ] Each instance can be removed individually
 - [ ] Baseline filename is auto-generated from the URL and saved to the correct path — user never types it
+- [ ] The naming convention should be - {testfile}_{breakpoint}.png e.g. visual_regression_test_yml_1280px.png
 - [ ] YAML is generated automatically and saved — user never sees or touches it
 
 **Priority:** 🔴 High
