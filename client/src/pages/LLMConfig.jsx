@@ -3,7 +3,7 @@ import { PROVIDERS, MODELS_BY_PROVIDER } from '../constants/llmProviders';
 
 export default function LLMConfig() {
   const [provider, setProvider] = useState('openai');
-  const [model, setModel] = useState('gpt-4o');
+  const [model, setModel] = useState('gpt-5');
   const [apiKey, setApiKey] = useState('');
   const [temperature, setTemperature] = useState(1);
   const [showKey, setShowKey] = useState(false);
