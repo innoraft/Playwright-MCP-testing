@@ -1175,4 +1175,500 @@ body {
   .tabs-container {
     overflow-x: auto;
   }
+  .runner-controls {
+    flex-direction: column;
+  }
+  .reports-layout {
+    flex-direction: column;
+  }
+  .report-list-panel {
+    width: 100%;
+    min-width: unset;
+    position: static;
+  }
 }
+
+/* ══════════════════════════════════════════════════════════
+   TEST RUNNER STYLES
+   ══════════════════════════════════════════════════════════ */
+
+/* ── Runner Controls ────────────────────────────────────── */
+.runner-controls {
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+}
+
+.runner-select-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.runner-select-group .form-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-label-icon {
+  font-size: 15px;
+}
+
+.runner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-bottom: 1px;
+}
+
+/* ── Run Button ─────────────────────────────────────────── */
+.btn-run {
+  padding: 12px 28px;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.btn-run:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(34, 197, 94, 0.4);
+}
+
+.btn-run:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-run:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  font-size: 13px;
+}
+
+/* ── Stop Button ────────────────────────────────────────── */
+.btn-stop {
+  padding: 12px 28px;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  animation: btn-pulse 2s ease-in-out infinite;
+}
+
+.btn-stop:hover {
+  box-shadow: 0 6px 24px rgba(239, 68, 68, 0.4);
+  transform: translateY(-1px);
+}
+
+@keyframes btn-pulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 4px 24px rgba(239, 68, 68, 0.5); }
+}
+
+/* ── Status Badge ───────────────────────────────────────── */
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: badge-appear 0.3s ease-out;
+}
+
+.status-badge.passed {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(22, 163, 74, 0.15));
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.1);
+}
+
+.status-badge.failed {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.15));
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
+}
+
+.status-badge-icon {
+  font-size: 15px;
+}
+
+@keyframes badge-appear {
+  from { transform: scale(0.8); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* ── Spinner ────────────────────────────────────────────── */
+.runner-spinner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.spinner-ring {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(99, 102, 241, 0.2);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ══════════════════════════════════════════════════════════
+   LOG CONSOLE
+   ══════════════════════════════════════════════════════════ */
+
+.log-console-container {
+  margin-top: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.log-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.log-console-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-label);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.log-console-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+.log-console-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-console {
+  min-height: 200px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 8px 0;
+  background: #0d1117;
+  font-family: 'Fira Code', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.log-console::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-console::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-console::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.log-console::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Log Lines ──────────────────────────────────────────── */
+.log-line {
+  display: flex;
+  padding: 1px 16px 1px 0;
+  transition: background var(--transition-fast);
+}
+
+.log-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.log-line-number {
+  width: 44px;
+  text-align: right;
+  padding-right: 12px;
+  color: rgba(255, 255, 255, 0.15);
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.log-line-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ── Log Type Colors ────────────────────────────────────── */
+.log-pass .log-line-text {
+  color: #4ade80;
+}
+
+.log-fail .log-line-text {
+  color: #f87171;
+}
+
+.log-llm .log-line-text {
+  color: #60a5fa;
+}
+
+.log-step .log-line-text {
+  color: #c084fc;
+}
+
+.log-fail {
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.log-pass {
+  background: rgba(34, 197, 94, 0.03);
+}
+
+/* ── Log Empty ──────────────────────────────────────────── */
+.log-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+}
+
+.log-empty-icon {
+  font-size: 32px;
+  opacity: 0.4;
+}
+
+/* ══════════════════════════════════════════════════════════
+   REPORTS STYLES
+   ══════════════════════════════════════════════════════════ */
+
+.reports-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+/* ── Report List Panel ──────────────────────────────────── */
+.report-list-panel {
+  width: 280px;
+  min-width: 280px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  position: sticky;
+  top: 24px;
+}
+
+.report-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.report-list-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.report-list {
+  padding: 8px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.report-list-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+}
+
+.report-list-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.report-list-item.active {
+  background: var(--accent-glow);
+  border-color: var(--border-primary);
+}
+
+.report-list-item-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.report-list-item-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.report-list-item-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.report-list-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.report-list-item-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Report Viewer ──────────────────────────────────────── */
+.report-viewer-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.report-viewer-container {
+  background: var(--bg-card);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.report-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.report-viewer-filename {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.report-open-btn {
+  padding: 6px 14px !important;
+  font-size: 12px !important;
+  text-decoration: none;
+}
+
+.report-iframe {
+  width: 100%;
+  height: 70vh;
+  border: none;
+  background: white;
+}
+
+/* ── Report Viewer Empty ────────────────────────────────── */
+.report-viewer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 80px 40px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+
+.report-viewer-empty-icon {
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.report-viewer-empty h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.report-viewer-empty p {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 360px;
+  line-height: 1.5;
+}
+

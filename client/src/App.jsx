@@ -1,10 +1,27 @@
 import { useState } from 'react';
 import LLMConfig from './pages/LLMConfig';
 import TestSuites from './pages/TestSuites';
+import TestRunner from './pages/TestRunner';
+import Reports from './pages/Reports';
 import './index.css';
 
 function App() {
   const [activePage, setActivePage] = useState('llm-config');
+  const [pendingReport, setPendingReport] = useState(null);
+
+  // Called by TestRunner when a run completes with a report file
+  const handleNavigateToReport = (reportFile) => {
+    setPendingReport(reportFile);
+    setActivePage('reports');
+  };
+
+  // Clear pending report when navigating away from reports
+  const handlePageChange = (page) => {
+    if (page !== 'reports') {
+      setPendingReport(null);
+    }
+    setActivePage(page);
+  };
 
   return (
     <div className="app-layout">
@@ -24,23 +41,29 @@ function App() {
           <div className="sidebar-section-label">Administration</div>
           <button
             className={`sidebar-link ${activePage === 'llm-config' ? 'active' : ''}`}
-            onClick={() => setActivePage('llm-config')}
+            onClick={() => handlePageChange('llm-config')}
           >
             <span className="sidebar-link-icon">🧠</span>
             LLM Config
           </button>
           <button
             className={`sidebar-link ${activePage === 'test-suites' ? 'active' : ''}`}
-            onClick={() => setActivePage('test-suites')}
+            onClick={() => handlePageChange('test-suites')}
           >
             <span className="sidebar-link-icon">📋</span>
             Test Suites
           </button>
-          <button className="sidebar-link" disabled style={{ opacity: 0.4 }}>
+          <button
+            className={`sidebar-link ${activePage === 'test-runner' ? 'active' : ''}`}
+            onClick={() => handlePageChange('test-runner')}
+          >
             <span className="sidebar-link-icon">▶️</span>
             Test Runner
           </button>
-          <button className="sidebar-link" disabled style={{ opacity: 0.4 }}>
+          <button
+            className={`sidebar-link ${activePage === 'reports' ? 'active' : ''}`}
+            onClick={() => handlePageChange('reports')}
+          >
             <span className="sidebar-link-icon">📊</span>
             Reports
           </button>
@@ -61,6 +84,8 @@ function App() {
       <main className="main-content">
         {activePage === 'llm-config' && <LLMConfig />}
         {activePage === 'test-suites' && <TestSuites />}
+        {activePage === 'test-runner' && <TestRunner onNavigateToReport={handleNavigateToReport} />}
+        {activePage === 'reports' && <Reports initialReport={pendingReport} />}
       </main>
     </div>
   );

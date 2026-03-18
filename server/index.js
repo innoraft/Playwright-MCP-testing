@@ -3,10 +3,13 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.json');
 const TESTS_DIR = path.join(__dirname, '..', 'tests');
+const REPORTS_DIR = path.join(__dirname, '..', 'test-reports');
+const PROJECT_ROOT = path.join(__dirname, '..');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -14,6 +17,9 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json({ limit: '10mb' }));
+
+// ── Static serving for test reports ────────────────────────
+app.use('/reports', express.static(REPORTS_DIR));
 
 // ── Role-based middleware ──────────────────────────────────
 function requireAdmin(req, res, next) {
@@ -186,6 +192,256 @@ app.delete('/api/tests/:name', (req, res) => {
   } catch (err) {
     console.error('Failed to delete test:', err);
     res.status(500).json({ error: 'Failed to delete test file' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  TEST RUNNER ENDPOINTS
+// ══════════════════════════════════════════════════════════
+
+// ── Runner state ───────────────────────────────────────────
+let runnerState = {
+  status: 'idle',        // 'idle' | 'running'
+  process: null,         // child process reference
+  logBuffer: [],         // buffered log lines
+  sseClients: [],        // connected SSE clients
+  result: null,          // 'passed' | 'failed' | null
+  reportFile: null       // latest report filename
+};
+
+function resetRunnerState() {
+  runnerState.status = 'idle';
+  runnerState.process = null;
+  runnerState.logBuffer = [];
+  runnerState.result = null;
+  runnerState.reportFile = null;
+}
+
+// ── Log type detection ─────────────────────────────────────
+function detectLogType(line) {
+  if (/✅|passed|✓.*passed/i.test(line)) return 'pass';
+  if (/❌|failed|✗.*failed|Error/i.test(line)) return 'fail';
+  if (/🤖|LLM/i.test(line)) return 'llm';
+  if (/📍|Step \d+/i.test(line)) return 'step';
+  return 'info';
+}
+
+// ── Broadcast to all SSE clients ───────────────────────────
+function broadcastSSE(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  runnerState.sseClients = runnerState.sseClients.filter(res => {
+    try {
+      res.write(msg);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// ── POST /api/runner/run ───────────────────────────────────
+app.post('/api/runner/run', (req, res) => {
+  const { testName } = req.body;
+
+  if (!testName) {
+    return res.status(400).json({ error: 'testName is required' });
+  }
+
+  if (runnerState.status === 'running') {
+    return res.status(409).json({ error: 'A test is already running' });
+  }
+
+  // Sanitize
+  if (testName.includes('..') || testName.includes('/')) {
+    return res.status(400).json({ error: 'Invalid test name' });
+  }
+
+  const testPath = path.join(TESTS_DIR, testName);
+  if (!fs.existsSync(testPath)) {
+    return res.status(404).json({ error: 'Test file not found' });
+  }
+
+  // Reset state for new run
+  resetRunnerState();
+  runnerState.status = 'running';
+
+  // Spawn the test runner as a child process
+  const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
+    cwd: PROJECT_ROOT,
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  runnerState.process = child;
+
+  // Handle stdout
+  let stdoutBuffer = '';
+  child.stdout.on('data', (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split('\n');
+    stdoutBuffer = lines.pop(); // keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      const logType = detectLogType(line);
+      const logEntry = { line, type: logType, timestamp: Date.now() };
+      runnerState.logBuffer.push(logEntry);
+      broadcastSSE('log', logEntry);
+    }
+  });
+
+  // Handle stderr
+  let stderrBuffer = '';
+  child.stderr.on('data', (chunk) => {
+    stderrBuffer += chunk.toString();
+    const lines = stderrBuffer.split('\n');
+    stderrBuffer = lines.pop();
+
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      const logEntry = { line, type: 'fail', timestamp: Date.now() };
+      runnerState.logBuffer.push(logEntry);
+      broadcastSSE('log', logEntry);
+    }
+  });
+
+  // Handle process exit
+  child.on('close', (code) => {
+    // Flush remaining buffers
+    if (stdoutBuffer.trim()) {
+      const logType = detectLogType(stdoutBuffer);
+      const logEntry = { line: stdoutBuffer, type: logType, timestamp: Date.now() };
+      runnerState.logBuffer.push(logEntry);
+      broadcastSSE('log', logEntry);
+    }
+    if (stderrBuffer.trim()) {
+      const logEntry = { line: stderrBuffer, type: 'fail', timestamp: Date.now() };
+      runnerState.logBuffer.push(logEntry);
+      broadcastSSE('log', logEntry);
+    }
+
+    runnerState.status = 'idle';
+    runnerState.result = code === 0 ? 'passed' : 'failed';
+    runnerState.process = null;
+
+    // Find the latest report file
+    try {
+      if (fs.existsSync(REPORTS_DIR)) {
+        const reports = fs.readdirSync(REPORTS_DIR)
+          .filter(f => f.endsWith('.html'))
+          .map(f => ({ name: f, mtime: fs.statSync(path.join(REPORTS_DIR, f)).mtimeMs }))
+          .sort((a, b) => b.mtime - a.mtime);
+
+        if (reports.length > 0) {
+          runnerState.reportFile = reports[0].name;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to find report:', err);
+    }
+
+    broadcastSSE('done', {
+      result: runnerState.result,
+      reportFile: runnerState.reportFile,
+      exitCode: code
+    });
+  });
+
+  child.on('error', (err) => {
+    console.error('Runner process error:', err);
+    runnerState.status = 'idle';
+    runnerState.result = 'failed';
+    runnerState.process = null;
+
+    const logEntry = { line: `Process error: ${err.message}`, type: 'fail', timestamp: Date.now() };
+    runnerState.logBuffer.push(logEntry);
+    broadcastSSE('log', logEntry);
+    broadcastSSE('done', { result: 'failed', reportFile: null, exitCode: -1 });
+  });
+
+  res.json({ success: true, message: `Running test: ${testName}` });
+});
+
+// ── GET /api/runner/logs (SSE) ─────────────────────────────
+app.get('/api/runner/logs', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  // Replay buffered logs
+  for (const logEntry of runnerState.logBuffer) {
+    res.write(`event: log\ndata: ${JSON.stringify(logEntry)}\n\n`);
+  }
+
+  // If run already finished, send done immediately
+  if (runnerState.status === 'idle' && runnerState.result) {
+    res.write(`event: done\ndata: ${JSON.stringify({
+      result: runnerState.result,
+      reportFile: runnerState.reportFile
+    })}\n\n`);
+  }
+
+  // Register client for future events
+  runnerState.sseClients.push(res);
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    runnerState.sseClients = runnerState.sseClients.filter(c => c !== res);
+  });
+});
+
+// ── POST /api/runner/stop ──────────────────────────────────
+app.post('/api/runner/stop', (req, res) => {
+  if (runnerState.status !== 'running' || !runnerState.process) {
+    return res.status(400).json({ error: 'No test is currently running' });
+  }
+
+  try {
+    runnerState.process.kill('SIGTERM');
+    res.json({ success: true, message: 'Test run stopped' });
+  } catch (err) {
+    console.error('Failed to stop runner:', err);
+    res.status(500).json({ error: 'Failed to stop test run' });
+  }
+});
+
+// ── GET /api/runner/status ─────────────────────────────────
+app.get('/api/runner/status', (req, res) => {
+  res.json({
+    status: runnerState.status,
+    result: runnerState.result,
+    reportFile: runnerState.reportFile,
+    logCount: runnerState.logBuffer.length
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  REPORTS ENDPOINTS
+// ══════════════════════════════════════════════════════════
+
+// ── GET /api/reports ───────────────────────────────────────
+app.get('/api/reports', (req, res) => {
+  try {
+    if (!fs.existsSync(REPORTS_DIR)) {
+      fs.mkdirSync(REPORTS_DIR, { recursive: true });
+      return res.json([]);
+    }
+
+    const reports = fs.readdirSync(REPORTS_DIR)
+      .filter(f => f.endsWith('.html'))
+      .map(f => {
+        const stat = fs.statSync(path.join(REPORTS_DIR, f));
+        return { name: f, modified: stat.mtimeMs };
+      })
+      .sort((a, b) => b.modified - a.modified);
+
+    res.json(reports);
+  } catch (err) {
+    console.error('Failed to list reports:', err);
+    res.status(500).json({ error: 'Failed to list reports' });
   }
 });
 
