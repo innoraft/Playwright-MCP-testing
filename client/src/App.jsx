@@ -3,6 +3,7 @@ import LLMConfig from './pages/LLMConfig';
 import TestSuites from './pages/TestSuites';
 import TestRunner from './pages/TestRunner';
 import Reports from './pages/Reports';
+import BaselineManager from './pages/BaselineManager';
 import './index.css';
 
 function App() {
@@ -68,6 +69,14 @@ function App() {
             Reports
           </button>
 
+          <button
+            className={`sidebar-link ${activePage === 'baselines' ? 'active' : ''}`}
+            onClick={() => handlePageChange('baselines')}
+          >
+            <span className="sidebar-link-icon">🖼️</span>
+            Baselines
+          </button>
+          
           <div className="sidebar-section-label">Settings</div>
           <button className="sidebar-link" disabled style={{ opacity: 0.4 }}>
             <span className="sidebar-link-icon">👤</span>
@@ -86,6 +95,7 @@ function App() {
         {activePage === 'test-suites' && <TestSuites />}
         {activePage === 'test-runner' && <TestRunner onNavigateToReport={handleNavigateToReport} />}
         {activePage === 'reports' && <Reports initialReport={pendingReport} />}
+        {activePage === 'baselines' && <BaselineManager />}
       </main>
     </div>
   );

@@ -4,12 +4,26 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import multer from 'multer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.json');
 const TESTS_DIR = path.join(__dirname, '..', 'tests');
 const REPORTS_DIR = path.join(__dirname, '..', 'test-reports');
 const PROJECT_ROOT = path.join(__dirname, '..');
+const FILES_DIR = path.join(PROJECT_ROOT, 'files');
+const BASELINES_DIR = path.join(FILES_DIR, 'baselines');
+
+// Ensure base directories exist
+fs.mkdirSync(BASELINES_DIR, { recursive: true });
+fs.mkdirSync(path.join(FILES_DIR, 'diffs'), { recursive: true });
+fs.mkdirSync(path.join(FILES_DIR, 'screenshots'), { recursive: true });
+
+// Setup multer for baseline uploads
+const upload = multer({
+  storage: multer.memoryStorage(), // We'll save it manually to control the filename
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,8 +32,11 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json({ limit: '10mb' }));
 
-// ── Static serving for test reports ────────────────────────
+// ── Static serving for test reports & images ────────────────
 app.use('/reports', express.static(REPORTS_DIR));
+app.use('/files/baselines', express.static(BASELINES_DIR));
+app.use('/files/diffs', express.static(path.join(FILES_DIR, 'diffs')));
+app.use('/files/screenshots', express.static(path.join(FILES_DIR, 'screenshots')));
 
 // ── Role-based middleware ──────────────────────────────────
 function requireAdmin(req, res, next) {
@@ -87,6 +104,94 @@ app.post('/api/llm-config', requireAdmin, (req, res) => {
 // ══════════════════════════════════════════════════════════
 //  TEST FILE ENDPOINTS
 // ══════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+//  BASELINE ENDPOINTS
+// ══════════════════════════════════════════════════════════
+
+// ── GET /api/baselines ─────────────────────────────────────
+app.get('/api/baselines', (req, res) => {
+  try {
+    if (!fs.existsSync(BASELINES_DIR)) {
+      return res.json([]);
+    }
+
+    const files = fs.readdirSync(BASELINES_DIR)
+      .filter(f => f.endsWith('.png'))
+      .map(f => {
+        const stat = fs.statSync(path.join(BASELINES_DIR, f));
+        // Parse filename: testName_breakpoint.png
+        const match = f.match(/^(.*)_(\d+px)\.png$/);
+        return {
+          filename: f,
+          testName: match ? match[1] : 'Unknown',
+          breakpoint: match ? match[2] : 'Unknown',
+          sizeBytes: stat.size,
+          modified: stat.mtimeMs
+        };
+      })
+      .sort((a, b) => b.modified - a.modified);
+
+    res.json(files);
+  } catch (err) {
+    console.error('Failed to list baselines:', err);
+    res.status(500).json({ error: 'Failed to list baseline images' });
+  }
+});
+
+// ── POST /api/baselines/upload ─────────────────────────────
+app.post('/api/baselines/upload', upload.single('image'), (req, res) => {
+  try {
+    const { testName, breakpoint } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+    if (!testName || !breakpoint) {
+      return res.status(400).json({ error: 'testName and breakpoint are required' });
+    }
+
+    // Generate safe filename matches what visual-regression.js expects
+    const safeName = testName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeBreakpoint = breakpoint.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `${safeName}_${safeBreakpoint}.png`;
+    const filePath = path.join(BASELINES_DIR, filename);
+
+    fs.writeFileSync(filePath, req.file.buffer);
+
+    res.json({
+      success: true,
+      message: 'Baseline image uploaded successfully',
+      filename,
+      path: `files/baselines/${filename}`
+    });
+  } catch (err) {
+    console.error('Failed to save baseline:', err);
+    res.status(500).json({ error: 'Failed to save baseline image' });
+  }
+});
+
+// ── DELETE /api/baselines/:filename ────────────────────────
+app.delete('/api/baselines/:filename', (req, res) => {
+  try {
+    const fileName = req.params.filename;
+
+    if (fileName.includes('..') || fileName.includes('/')) {
+      return res.status(400).json({ error: 'Invalid file name' });
+    }
+
+    const filePath = path.join(BASELINES_DIR, fileName);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Baseline image not found' });
+    }
+
+    fs.unlinkSync(filePath);
+    res.json({ success: true, message: `Deleted ${fileName}` });
+  } catch (err) {
+    console.error('Failed to delete baseline:', err);
+    res.status(500).json({ error: 'Failed to delete baseline image' });
+  }
+});
 
 // ── GET /api/tests ─────────────────────────────────────────
 // List all .test.yml files in the tests/ directory

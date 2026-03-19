@@ -12,9 +12,13 @@ function generateScreenshotName(testName, width) {
 export default function VisualRegressionForm({ initialData, onSave, saving }) {
   const [testName, setTestName] = useState(initialData?.testName || '');
   const [url, setUrl] = useState(initialData?.url || '');
+  const [threshold, setThreshold] = useState(initialData?.threshold ?? 0.1);
+  const [failOnPercent, setFailOnPercent] = useState(initialData?.failOnPercent ?? 1.0);
   const [breakpoints, setBreakpoints] = useState(
     initialData?.breakpoints || [{ width: 1280, height: 720 }]
   );
+  const [baselines, setBaselines] = useState({});
+  const [uploading, setUploading] = useState(false);
   const [errors, setErrors] = useState({});
 
   // ── Computed screenshot names ─────────────────────────
@@ -51,12 +55,53 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
     if (!testName.trim()) errs.testName = 'Test name is required';
     if (!url.trim()) errs.url = 'URL is required';
     else if (!/^https?:\/\/.+/.test(url.trim())) errs.url = 'Enter a valid URL starting with http:// or https://';
+    if (threshold < 0 || threshold > 1) errs.threshold = 'Must be between 0.0 and 1.0';
+    if (failOnPercent < 0 || failOnPercent > 100) errs.failOnPercent = 'Must be between 0.0 and 100.0';
+
     breakpoints.forEach((bp, i) => {
       if (!bp.width || bp.width < 1) errs[`bp-${i}-width`] = 'Width must be > 0';
       if (!bp.height || bp.height < 1) errs[`bp-${i}-height`] = 'Height must be > 0';
     });
     setErrors(errs);
     return Object.keys(errs).length === 0;
+  };
+
+  // ── Baseline Upload ───────────────────────────────────
+  const handleBaselineUpload = async (file, index) => {
+    if (!file) return;
+    if (!testName.trim()) {
+      setErrors(prev => ({ ...prev, testName: 'Test name required before uploading baselines' }));
+      return;
+    }
+
+    setUploading(index);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('testName', testName);
+      formData.append('breakpoint', `${breakpoints[index].width}px`);
+
+      const res = await fetch('/api/baselines/upload', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+
+      setBaselines(prev => ({
+        ...prev,
+        [index]: {
+          url: `/${data.path}?t=${Date.now()}`,
+          filename: data.filename
+        }
+      }));
+    } catch (err) {
+      console.error(err);
+      alert('Failed to upload baseline');
+    } finally {
+      setUploading(false);
+    }
   };
 
   // ── YAML Generation (matches user's buildYAML prompt) ─
@@ -78,7 +123,7 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
       steps.push(`  - Wait for 2 seconds`);
       steps.push(`  - Navigate the page till the header`);
       steps.push(`  - Take a screenshot of the full page and save by giving the name '${screenshotName}'`);
-      steps.push(`  - Check visual regression at breakpoint ${bp.width}px using screenshot files/screenshots/${screenshotName}`);
+      steps.push(`  - Check visual regression at breakpoint ${bp.width}px using screenshot files/screenshots/${screenshotName} strictly checking if threshold is ${threshold} or the file is less than ${failOnPercent} percent differing otherwise failing.`);
     });
     return `name: ${name}\nsteps:\n${steps.join('\n')}\n`;
   };
@@ -132,6 +177,51 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
           }}
         />
         {errors.url && <span className="form-error-text">{errors.url}</span>}
+      </div>
+
+      {/* Sensitivity Controls */}
+      <div className="form-row" style={{ display: 'flex', gap: '20px', marginTop: '16px' }}>
+        <div className="form-group" style={{ flex: 1 }}>
+          <label className="form-label" htmlFor="vr-threshold">
+            Pixel Threshold (0.0 - 1.0)
+            <span className="form-label-hint">Lower = stricter</span>
+          </label>
+          <input
+            id="vr-threshold"
+            className={`form-input ${errors.threshold ? 'form-input-error' : ''}`}
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            value={threshold}
+            onChange={(e) => {
+              setThreshold(parseFloat(e.target.value) || 0);
+              setErrors(prev => { const n = { ...prev }; delete n.threshold; return n; });
+            }}
+          />
+          {errors.threshold && <span className="form-error-text">{errors.threshold}</span>}
+        </div>
+
+        <div className="form-group" style={{ flex: 1 }}>
+          <label className="form-label" htmlFor="vr-fail">
+            Allowed Mismatch %
+            <span className="form-label-hint">0.0 - 100.0</span>
+          </label>
+          <input
+            id="vr-fail"
+            className={`form-input ${errors.failOnPercent ? 'form-input-error' : ''}`}
+            type="number"
+            step="0.1"
+            min="0"
+            max="100"
+            value={failOnPercent}
+            onChange={(e) => {
+              setFailOnPercent(parseFloat(e.target.value) || 0);
+              setErrors(prev => { const n = { ...prev }; delete n.failOnPercent; return n; });
+            }}
+          />
+          {errors.failOnPercent && <span className="form-error-text">{errors.failOnPercent}</span>}
+        </div>
       </div>
 
       <hr className="form-divider" />
@@ -197,10 +287,42 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
               </div>
             </div>
 
-            {/* Screenshot name preview */}
-            <div className="screenshot-preview">
-              <span className="screenshot-preview-label">📸 Screenshot:</span>
-              <code className="screenshot-preview-name">{screenshotPreviews[index]}</code>
+            {/* Screenshot name preview & Baseline Upload */}
+            <div className="bp-baseline-section" style={{ marginTop: '12px', padding: '12px', background: '#f9fafb', borderRadius: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div className="screenshot-preview">
+                  <span className="screenshot-preview-label">📸 Screenshot:</span>
+                  <code className="screenshot-preview-name">{screenshotPreviews[index]}</code>
+                </div>
+                
+                <div className="baseline-status">
+                  {baselines[index] || initialData?.hasBaseline ? (
+                    <span style={{ color: '#15803d', fontSize: '12px', fontWeight: '600' }}>✅ Baseline ready</span>
+                  ) : (
+                    <span style={{ color: '#9ca3af', fontSize: '12px' }}>No baseline</span>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                <div style={{ flex: 1 }}>
+                  <label className="form-label form-label-sm">Upload Baseline PNG</label>
+                  <input 
+                    type="file" 
+                    accept="image/png"
+                    onChange={(e) => handleBaselineUpload(e.target.files[0], index)}
+                    disabled={uploading === index || !testName.trim()}
+                    style={{ fontSize: '13px' }}
+                  />
+                  {uploading === index && <span style={{ fontSize: '12px', color: '#6366f1', marginLeft: '8px' }}>Uploading...</span>}
+                </div>
+                
+                {baselines[index] && (
+                  <div className="baseline-preview" style={{ width: '100px', height: '60px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+                    <img src={baselines[index].url} alt="Baseline preview" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#fff' }} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ))}
