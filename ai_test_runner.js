@@ -502,10 +502,16 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @throws {Error} If test fails
    */
   async runTest(testText, testName) {
-    log.info(`🧪 Starting test: ${testName}`);
+    // Extract the logical test name from YAML 'name:' field if present,
+    // so that baseline filenames stay consistent across naming conventions.
+    const yamlNameMatch = testText.match(/^name:\s*(.+)$/m);
+    const logicalName = yamlNameMatch ? yamlNameMatch[1].trim() : testName;
+    this.logicalTestName = logicalName;
+
+    log.info(`🧪 Starting test: ${testName} (logical name: ${logicalName})`);
 
     this.testReport = {
-      testName,
+      testName: logicalName,
       testText,
       startTime: new Date(),
       endTime: null,
@@ -545,8 +551,10 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
         }
 
         try {
+          // Use the logical YAML name (not the filename) so baseline paths match
+          const vrTestName = this.logicalTestName || testName;
           const result = this.visualChecker.runRegressionStep(
-            testName,
+            vrTestName,
             breakpoint,
             screenshotPath
           );

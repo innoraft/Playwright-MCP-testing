@@ -183,8 +183,8 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
       <div className="form-row" style={{ display: 'flex', gap: '20px', marginTop: '16px' }}>
         <div className="form-group" style={{ flex: 1 }}>
           <label className="form-label" htmlFor="vr-threshold">
-            Pixel Threshold (0.0 - 1.0)
-            <span className="form-label-hint">Lower = stricter</span>
+            Color Sensitivity
+            <span className="form-label-hint">0 = exact match, 1 = very lenient</span>
           </label>
           <input
             id="vr-threshold"
@@ -204,8 +204,8 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
 
         <div className="form-group" style={{ flex: 1 }}>
           <label className="form-label" htmlFor="vr-fail">
-            Allowed Mismatch %
-            <span className="form-label-hint">0.0 - 100.0</span>
+            Acceptable Difference %
+            <span className="form-label-hint">How much of the page can differ before failing</span>
           </label>
           <input
             id="vr-fail"
@@ -306,10 +306,10 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
 
               <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <div style={{ flex: 1 }}>
-                  <label className="form-label form-label-sm">Upload Baseline PNG</label>
+                  <label className="form-label form-label-sm">Upload Baseline Image</label>
                   <input 
                     type="file" 
-                    accept="image/png"
+                    accept="image/png,image/jpeg,image/jpg"
                     onChange={(e) => handleBaselineUpload(e.target.files[0], index)}
                     disabled={uploading === index || !testName.trim()}
                     style={{ fontSize: '13px' }}

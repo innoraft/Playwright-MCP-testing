@@ -133,11 +133,11 @@ app.get('/api/baselines', (req, res) => {
     }
 
     const files = fs.readdirSync(BASELINES_DIR)
-      .filter(f => f.endsWith('.png'))
+      .filter(f => /\.(png|jpg|jpeg)$/i.test(f))
       .map(f => {
         const stat = fs.statSync(path.join(BASELINES_DIR, f));
         // Parse filename: testName_breakpoint.png
-        const match = f.match(/^(.*)_(\d+px)\.png$/);
+        const match = f.match(/^(.*)_(\d+px)\.(png|jpg|jpeg)$/i);
         return {
           filename: f,
           testName: match ? match[1] : 'Unknown',
@@ -163,10 +163,18 @@ app.post('/api/baselines/upload', upload.single('image'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: 'Only PNG, JPG and JPEG images are supported' });
+    }
+
     if (!testName || !breakpoint) {
       return res.status(400).json({ error: 'testName and breakpoint are required' });
     }
 
+    // Determine extension from uploaded file
+    const ext = req.file.mimetype === 'image/png' ? 'png' : 'jpg';
     // Generate safe filename matches what visual-regression.js expects
     const safeName = testName.replace(/[^a-zA-Z0-9_-]/g, '_');
     const safeBreakpoint = breakpoint.replace(/[^a-zA-Z0-9_-]/g, '_');
