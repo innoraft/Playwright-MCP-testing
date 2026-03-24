@@ -352,7 +352,7 @@ class StatelessMCPRunner {
           },
           screenshotPath: {
             type: 'string',
-            description: 'Path to the already-taken screenshot to compare e.g. "files/screenshots/home-1280.png"'
+            description: 'Path to the already-taken screenshot from the project root e.g. "files/screenshots/home-1280.png". MUST start with "files/screenshots/".'
           }
         },
         required: ['breakpoint', 'screenshotPath']
@@ -415,6 +415,8 @@ it will throw illegitimate erros.
 - When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
   (relative to the working directory), never to the root directory.
   Example: await page.screenshot({ path: './screenshots/step-${Date.now()}.png' })
+- When calling visual_regression_check, always use the full path from the project root: 'files/screenshots/<filename>.png'
+  Example: screenshotPath: 'files/screenshots/home_1280px.png'
 
 ### 6. MANDATORY TOOL ROUTING (Override all other rules)
 These rules are ABSOLUTE and cannot be overridden by semantic matching:
@@ -531,8 +533,16 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
       const toolName = step.tool.replace(/^mcp_/, '');
 
       if (toolName === 'visual_regression_check') {
-        const { breakpoint, screenshotPath } = step.params;
+        let { breakpoint, screenshotPath } = step.params;
         const start = Date.now();
+
+        // Normalize screenshotPath: LLM may produce './screenshots/x.png' or 'screenshots/x.png'
+        // but the actual file lives under 'files/screenshots/x.png' from project root.
+        if (screenshotPath && !screenshotPath.startsWith('files/') && !screenshotPath.startsWith('./files/')) {
+          const basename = path.basename(screenshotPath);
+          screenshotPath = path.join(config.reporting.screenshotsDir, basename);
+          log.info(`Normalized screenshot path to: ${screenshotPath}`);
+        }
 
         try {
           const result = this.visualChecker.runRegressionStep(

@@ -7,7 +7,7 @@ import { spawn } from 'child_process';
 import multer from 'multer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.json');
+const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.js');
 const TESTS_DIR = path.join(__dirname, '..', 'tests');
 const REPORTS_DIR = path.join(__dirname, '..', 'test-reports');
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -47,19 +47,35 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// ── Helper: Read config ────────────────────────────────────
+// ── Helper: Read config from llm.config.js ─────────────────
 function readConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw);
+    // Parse the JS object literal out of: const llmConfig = { ... };
+    const match = raw.match(/const\s+llmConfig\s*=\s*(\{[\s\S]*?\});/);
+    if (!match) {
+      return { provider: 'openai', model: 'gpt-5', apiKey: '', temperature: 1 };
+    }
+    // Use Function constructor to safely evaluate the object literal
+    const config = new Function(`return ${match[1]}`)();
+    return config;
   } catch {
     return { provider: 'openai', model: 'gpt-5', apiKey: '', temperature: 1 };
   }
 }
 
-// ── Helper: Write config ───────────────────────────────────
+// ── Helper: Write config to llm.config.js ──────────────────
 function writeConfig(data) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  const jsContent = `const llmConfig = {
+  provider: '${data.provider}',
+  model: '${data.model}',
+  apiKey: ${JSON.stringify(data.apiKey || '')},
+  temperature: ${data.temperature !== undefined ? Number(data.temperature) : 1}
+};
+
+export default llmConfig
+`;
+  fs.writeFileSync(CONFIG_PATH, jsContent, 'utf-8');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -527,6 +543,53 @@ app.get('/api/runner/status', (req, res) => {
 //  REPORTS ENDPOINTS
 // ══════════════════════════════════════════════════════════
 
+/**
+ * Parse an HTML report to extract summary metadata (result, steps, duration, etc.)
+ * This allows the dashboard sidebar to show rich info without loading the full report.
+ */
+function parseReportMetadata(filePath) {
+  try {
+    const html = fs.readFileSync(filePath, 'utf-8');
+    const meta = {};
+
+    // Extract test result (PASS / FAIL)
+    const resultMatch = html.match(/<div class="stat-value (success|failure)">\s*(PASS|FAIL)\s*<\/div>/i);
+    meta.result = resultMatch ? resultMatch[2].toLowerCase() : 'unknown';
+
+    // Extract total actions
+    const totalMatch = html.match(/<div class="stat-value">(\d+)<\/div>\s*<div class="stat-label">Total Actions<\/div>/i);
+    meta.totalActions = totalMatch ? parseInt(totalMatch[1], 10) : 0;
+
+    // Extract passed
+    const passedMatch = html.match(/<div class="stat-value success">(\d+)<\/div>\s*<div class="stat-label">Passed<\/div>/i);
+    meta.passed = passedMatch ? parseInt(passedMatch[1], 10) : 0;
+
+    // Extract failed
+    const failedMatch = html.match(/<div class="stat-value failure">(\d+)<\/div>\s*<div class="stat-label">Failed<\/div>/i);
+    meta.failed = failedMatch ? parseInt(failedMatch[1], 10) : 0;
+
+    // Extract success rate
+    const rateMatch = html.match(/<div class="stat-value">([\d.]+)%<\/div>\s*<div class="stat-label">Success Rate<\/div>/i);
+    meta.successRate = rateMatch ? parseFloat(rateMatch[1]) : 0;
+
+    // Extract duration
+    const durMatch = html.match(/<div class="stat-value">([\d.]+[ms]+)<\/div>\s*<div class="stat-label">Duration<\/div>/i);
+    meta.duration = durMatch ? durMatch[1] : 'N/A';
+
+    // Extract visual checks (optional)
+    const vrMatch = html.match(/<div class="stat-value"[^>]*>(\d+\/\d+)<\/div>\s*<div class="stat-label">Visual Checks<\/div>/i);
+    meta.visualChecks = vrMatch ? vrMatch[1] : null;
+
+    // Extract generated date from header
+    const dateMatch = html.match(/Generated on (.+?)<\/p>/);
+    meta.generatedAt = dateMatch ? dateMatch[1].trim() : null;
+
+    return meta;
+  } catch {
+    return { result: 'unknown', totalActions: 0, passed: 0, failed: 0, successRate: 0, duration: 'N/A' };
+  }
+}
+
 // ── GET /api/reports ───────────────────────────────────────
 app.get('/api/reports', (req, res) => {
   try {
@@ -539,7 +602,13 @@ app.get('/api/reports', (req, res) => {
       .filter(f => f.endsWith('.html'))
       .map(f => {
         const stat = fs.statSync(path.join(REPORTS_DIR, f));
-        return { name: f, modified: stat.mtimeMs };
+        const meta = parseReportMetadata(path.join(REPORTS_DIR, f));
+        return {
+          name: f,
+          modified: stat.mtimeMs,
+          sizeBytes: stat.size,
+          ...meta
+        };
       })
       .sort((a, b) => b.modified - a.modified);
 
@@ -547,6 +616,28 @@ app.get('/api/reports', (req, res) => {
   } catch (err) {
     console.error('Failed to list reports:', err);
     res.status(500).json({ error: 'Failed to list reports' });
+  }
+});
+
+// ── DELETE /api/reports/:filename ──────────────────────────
+app.delete('/api/reports/:filename', (req, res) => {
+  try {
+    const fileName = req.params.filename;
+
+    if (fileName.includes('..') || fileName.includes('/')) {
+      return res.status(400).json({ error: 'Invalid file name' });
+    }
+
+    const filePath = path.join(REPORTS_DIR, fileName);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    fs.unlinkSync(filePath);
+    res.json({ success: true, message: `Deleted ${fileName}` });
+  } catch (err) {
+    console.error('Failed to delete report:', err);
+    res.status(500).json({ error: 'Failed to delete report' });
   }
 });
 
