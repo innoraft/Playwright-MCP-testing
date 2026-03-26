@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 export default function TestRunner({ onNavigateToReport }) {
+  const { authFetch, token } = useAuth();
   const [tests, setTests] = useState([]);
   const [selectedTest, setSelectedTest] = useState('');
   const [status, setStatus] = useState('idle'); // idle | running | done
@@ -19,11 +21,11 @@ export default function TestRunner({ onNavigateToReport }) {
 
   // ── Load test list ────────────────────────────────────
   useEffect(() => {
-    fetch('/api/tests')
+    authFetch('/api/tests')
       .then(res => res.json())
       .then(data => setTests(data))
       .catch(() => showToast('Could not load test files', 'error'));
-  }, [showToast]);
+  }, [showToast, authFetch]);
 
   // ── Auto-scroll logs ─────────────────────────────────
   useEffect(() => {
@@ -47,7 +49,7 @@ export default function TestRunner({ onNavigateToReport }) {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource('/api/runner/logs');
+    const es = new EventSource(`/api/runner/logs?token=${encodeURIComponent(token)}`);
     eventSourceRef.current = es;
 
     es.addEventListener('log', (e) => {
@@ -92,9 +94,8 @@ export default function TestRunner({ onNavigateToReport }) {
     setStatus('running');
 
     try {
-      const res = await fetch('/api/runner/run', {
+      const res = await authFetch('/api/runner/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ testName: selectedTest })
       });
 
@@ -114,7 +115,7 @@ export default function TestRunner({ onNavigateToReport }) {
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
     try {
-      await fetch('/api/runner/stop', { method: 'POST' });
+      await authFetch('/api/runner/stop', { method: 'POST' });
       showToast('Test run stopped');
     } catch {
       showToast('Failed to stop test', 'error');

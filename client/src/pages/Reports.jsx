@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 export default function Reports({ initialReport }) {
+  const { authFetch } = useAuth();
   const [reports, setReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,7 +21,7 @@ export default function Reports({ initialReport }) {
   const fetchReports = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const res = await fetch('/api/reports');
+      const res = await authFetch('/api/reports');
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setReports(data);
@@ -61,7 +63,7 @@ export default function Reports({ initialReport }) {
   // ── Delete report ─────────────────────────────────────
   const handleDelete = async (fileName) => {
     try {
-      const res = await fetch(`/api/reports/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/reports/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete');
       showToast('Report deleted');
       if (selectedReport === fileName) {

@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 // ── Screenshot name generator ───────────────────────────
 function generateScreenshotName(testName, width) {
@@ -10,6 +11,7 @@ function generateScreenshotName(testName, width) {
 }
 
 export default function VisualRegressionForm({ initialData, onSave, saving }) {
+  const { authFetch } = useAuth();
   const [testName, setTestName] = useState(initialData?.testName || '');
   const [url, setUrl] = useState(initialData?.url || '');
   const [threshold, setThreshold] = useState(initialData?.threshold ?? 0.1);
@@ -81,7 +83,7 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
       formData.append('testName', testName);
       formData.append('breakpoint', `${breakpoints[index].width}px`);
 
-      const res = await fetch('/api/baselines/upload', {
+      const res = await authFetch('/api/baselines/upload', {
         method: 'POST',
         body: formData
       });

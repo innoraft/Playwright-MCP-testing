@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
 import AdvancedEditor from '../components/AdvancedEditor';
+import { useAuth } from '../hooks/useAuth';
 
 const TABS = [
   { id: 'general', label: 'General Test', icon: '📋' },
@@ -10,6 +11,7 @@ const TABS = [
 ];
 
 export default function TestSuites() {
+  const { authFetch } = useAuth();
   const [tests, setTests] = useState([]);
   const [activeTab, setActiveTab] = useState('general');
   const [selectedTest, setSelectedTest] = useState(null);
@@ -32,7 +34,7 @@ export default function TestSuites() {
   // ── Load test list ────────────────────────────────────
   const fetchTests = useCallback(async () => {
     try {
-      const res = await fetch('/api/tests');
+      const res = await authFetch('/api/tests');
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setTests(data);
@@ -115,7 +117,7 @@ export default function TestSuites() {
   // ── Select a test from the list ───────────────────────
   const handleSelectTest = async (test) => {
     try {
-      const res = await fetch(`/api/tests/${test.name}`);
+      const res = await authFetch(`/api/tests/${test.name}`);
       if (!res.ok) throw new Error('Failed to load test');
       const data = await res.json();
 
@@ -150,9 +152,8 @@ export default function TestSuites() {
   const handleSave = async (fileName, content) => {
     setSaving(true);
     try {
-      const res = await fetch('/api/tests', {
+      const res = await authFetch('/api/tests', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: fileName, content }),
       });
 
@@ -177,7 +178,7 @@ export default function TestSuites() {
   // ── Delete handler ────────────────────────────────────
   const handleDelete = async (testName) => {
     try {
-      const res = await fetch(`/api/tests/${testName}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/tests/${testName}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Delete failed');
 
       showToast(`Deleted ${testName}`);

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 
@@ -40,6 +41,7 @@ function formatDate(timestamp) {
 }
 
 export default function FileBrowser() {
+  const { authFetch } = useAuth();
   const [items, setItems] = useState([]);
   const [breadcrumbs, setBreadcrumbs] = useState([]);
   const [currentPath, setCurrentPath] = useState('');
@@ -64,7 +66,7 @@ export default function FileBrowser() {
       const url = folder
         ? `/api/files/browse?folder=${encodeURIComponent(folder)}`
         : '/api/files/browse';
-      const res = await fetch(url);
+      const res = await authFetch(url);
       if (!res.ok) throw new Error('Failed to browse directory');
       const data = await res.json();
       setItems(data.items);
@@ -108,7 +110,7 @@ export default function FileBrowser() {
   // ── Delete file ───────────────────────────────────────
   const deleteFile = useCallback(async (filePath) => {
     try {
-      const res = await fetch(`/api/files/delete/${filePath}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/files/delete/${filePath}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete');
       showToast('File deleted successfully');
       // Clear preview if deleted file was previewed

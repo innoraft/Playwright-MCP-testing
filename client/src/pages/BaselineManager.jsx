@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 export default function BaselineManager() {
+  const { authFetch } = useAuth();
   const [baselines, setBaselines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
@@ -19,7 +21,7 @@ export default function BaselineManager() {
   // ── Load baselines ────────────────────────────────────
   const fetchBaselines = useCallback(async () => {
     try {
-      const res = await fetch('/api/baselines');
+      const res = await authFetch('/api/baselines');
       if (!res.ok) throw new Error('Failed to load baselines');
       const data = await res.json();
       setBaselines(data);
@@ -97,7 +99,7 @@ export default function BaselineManager() {
           : uploadData.breakpoint;
         formData.append('breakpoint', bp);
 
-        const res = await fetch('/api/baselines/upload', {
+        const res = await authFetch('/api/baselines/upload', {
           method: 'POST',
           body: formData
         });
@@ -126,7 +128,7 @@ export default function BaselineManager() {
   // ── Delete ────────────────────────────────────────────
   const handleDelete = async (filename) => {
     try {
-      const res = await fetch(`/api/baselines/${filename}`, { method: 'DELETE' });
+      const res = await authFetch(`/api/baselines/${filename}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Delete failed');
       showToast('Baseline deleted');
       setDeleteConfirm(null);

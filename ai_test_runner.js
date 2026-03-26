@@ -75,6 +75,7 @@ class StatelessMCPRunner {
   /**
    * Extracts the most relevant screenshot file path from an MCP tool result.
    * Scans text output for image filenames emitted by Playwright.
+   * If the file landed in /files root (MCP default), moves it to /files/screenshots.
    *
    * @param {Object} result - MCP tool execution result
    * @returns {string|null} Absolute screenshot path or null if none found
@@ -96,7 +97,7 @@ class StatelessMCPRunner {
 
     // Preferred path (where browser_take_screenshot saves)
     const screenshotsPath = path.join(config.reporting.screenshotsDir, filename);
-    // Fallback path (where browser_run_code saves)
+    // Fallback path (where MCP browser may save to /files root)
     const filesRootPath = path.join('files', filename);
 
     // If the file landed in /files root, move it to /files/screenshots
@@ -106,6 +107,27 @@ class StatelessMCPRunner {
     }
 
     return screenshotsPath;
+  }
+
+  /**
+   * Cleans up any stray image files left in /files root by MCP Playwright.
+   * Moves them to /files/screenshots so /files root stays clean.
+   */
+  cleanupStrayFiles() {
+    const filesDir = 'files';
+    try {
+      const entries = fs.readdirSync(filesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && /\.(png|jpg|jpeg)$/i.test(entry.name)) {
+          const src = path.join(filesDir, entry.name);
+          const dest = path.join(config.reporting.screenshotsDir, entry.name);
+          fs.renameSync(src, dest);
+          log.info(`Cleaned up stray file: moved ${entry.name} → files/screenshots/`);
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 
   /**
@@ -769,6 +791,7 @@ async function main() {
       log.error(`❌ Test FAILED: ${testName}`, err.message + '\n');
 
     } finally {
+      runner.cleanupStrayFiles();
       await runner.cleanup();
     }
   }

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PROVIDERS, MODELS_BY_PROVIDER } from '../constants/llmProviders';
+import { useAuth } from '../hooks/useAuth';
 
 export default function LLMConfig() {
+  const { authFetch } = useAuth();
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-5');
   const [apiKey, setApiKey] = useState('');
@@ -13,9 +15,7 @@ export default function LLMConfig() {
 
   // ── Load saved config on mount ────────────────────────
   useEffect(() => {
-    fetch('/api/llm-config', {
-      headers: { 'x-user-role': 'admin' },
-    })
+    authFetch('/api/llm-config')
       .then((res) => {
         if (!res.ok) throw new Error('Failed to load');
         return res.json();
@@ -50,12 +50,8 @@ export default function LLMConfig() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/llm-config', {
+      const res = await authFetch('/api/llm-config', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-role': 'admin',
-        },
         body: JSON.stringify({ provider, model, apiKey, temperature }),
       });
 

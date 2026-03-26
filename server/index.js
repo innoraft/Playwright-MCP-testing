@@ -5,6 +5,29 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import multer from 'multer';
+import {
+  initializeAuth,
+  signToken,
+  authenticate,
+  requireAuth,
+  requireAdminRole,
+  getAllUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  requestPasswordReset,
+  getResetRequests,
+  clearResetRequest
+} from './auth.js';
+import {
+  setOwner,
+  getOwner,
+  removeOwner,
+  setOwnerBulk,
+  getOwnedFilenames,
+  isOwnerOrAdmin,
+  migrateExistingFiles
+} from './ownership.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.js');
@@ -19,10 +42,15 @@ fs.mkdirSync(BASELINES_DIR, { recursive: true });
 fs.mkdirSync(path.join(FILES_DIR, 'diffs'), { recursive: true });
 fs.mkdirSync(path.join(FILES_DIR, 'screenshots'), { recursive: true });
 
+// Helper: check if the current user has admin role
+function reqIsAdmin(req) {
+  return req.user && req.user.roles && req.user.roles.includes('admin');
+}
+
 // Setup multer for baseline uploads
 const upload = multer({
-  storage: multer.memoryStorage(), // We'll save it manually to control the filename
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
 
 const app = express();
@@ -31,7 +59,6 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (curl, server-to-server) or any localhost port
     if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
       callback(null, true);
     } else {
@@ -47,14 +74,192 @@ app.use('/files/baselines', express.static(BASELINES_DIR));
 app.use('/files/diffs', express.static(path.join(FILES_DIR, 'diffs')));
 app.use('/files/screenshots', express.static(path.join(FILES_DIR, 'screenshots')));
 
-// ── Role-based middleware ──────────────────────────────────
-function requireAdmin(req, res, next) {
-  const role = req.headers['x-user-role'];
-  if (role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+// ══════════════════════════════════════════════════════════
+//  AUTHENTICATION ENDPOINTS
+// ══════════════════════════════════════════════════════════
+
+// ── POST /api/auth/login ───────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    const user = await authenticate(username, password);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = signToken(user);
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        roles: user.roles
+      }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Login failed' });
   }
-  next();
-}
+});
+
+// ── GET /api/auth/me ───────────────────────────────────────
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  const user = getUserById(req.user.userId);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  res.json({
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    roles: user.roles,
+    active: user.active
+  });
+});
+
+// ── POST /api/auth/change-password ─────────────────────────
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Both current and new passwords are required' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    // Verify current password
+    const user = await authenticate(req.user.username, currentPassword);
+    if (!user) {
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+
+    await updateUser(req.user.userId, { password: newPassword });
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  USER MANAGEMENT ENDPOINTS (Admin only)
+// ══════════════════════════════════════════════════════════
+
+// ── POST /api/auth/forgot-password ───────────────────────
+app.post('/api/auth/forgot-password', (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+
+    const result = requestPasswordReset(username);
+    // Always return success to avoid username enumeration
+    res.json({
+      success: true,
+      message: 'If the account exists, a password reset request has been submitted. Your administrator will set a new password for you.'
+    });
+    if (result) {
+      console.log(`🔑 Password reset requested for user: ${username}`);
+    }
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Failed to process reset request' });
+  }
+});
+
+// ── GET /api/users/reset-requests (Admin) ───────────────
+app.get('/api/users/reset-requests', requireAuth, requireAdminRole, (req, res) => {
+  res.json(getResetRequests());
+});
+
+// ── POST /api/users/:id/admin-reset (Admin) ─────────────
+app.post('/api/users/:id/admin-reset', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    const user = getUserById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    await updateUser(req.params.id, { password: newPassword });
+    clearResetRequest(req.params.id);
+    console.log(`🛡️ Admin reset password for user: ${user.username}`);
+    res.json({ success: true, message: `Password reset for ${user.username}` });
+  } catch (err) {
+    console.error('Admin reset error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/users/:id/reset-request (Admin) ─────────
+app.delete('/api/users/:id/reset-request', requireAuth, requireAdminRole, (req, res) => {
+  try {
+    clearResetRequest(req.params.id);
+    res.json({ success: true, message: 'Reset request dismissed' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── GET /api/users ─────────────────────────────────────────
+app.get('/api/users', requireAuth, requireAdminRole, (req, res) => {
+  res.json(getAllUsers());
+});
+
+// ── POST /api/users ────────────────────────────────────────
+app.post('/api/users', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    const { username, email, password, roles } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    const user = await createUser({ username, email, password, roles });
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Create user error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── PUT /api/users/:id ─────────────────────────────────────
+app.put('/api/users/:id', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    const { username, email, password, roles, active } = req.body;
+    const user = await updateUser(req.params.id, { username, email, password, roles, active });
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Update user error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── PUT /api/users/:id/toggle-active ───────────────────────
+app.put('/api/users/:id/toggle-active', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    const user = getUserById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const updated = await updateUser(req.params.id, { active: !user.active });
+    res.json({ success: true, user: updated });
+  } catch (err) {
+    console.error('Toggle user error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ── Helper: Read config from llm.config.js ─────────────────
 function readConfig() {
@@ -92,7 +297,7 @@ export default llmConfig
 // ══════════════════════════════════════════════════════════
 
 // ── GET /api/llm-config ────────────────────────────────────
-app.get('/api/llm-config', requireAdmin, (req, res) => {
+app.get('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
   const config = readConfig();
   res.json({
     provider: config.provider,
@@ -103,7 +308,7 @@ app.get('/api/llm-config', requireAdmin, (req, res) => {
 });
 
 // ── POST /api/llm-config ───────────────────────────────────
-app.post('/api/llm-config', requireAdmin, (req, res) => {
+app.post('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
   const { provider, model, apiKey, temperature } = req.body;
 
   if (!provider || !model) {
@@ -135,17 +340,20 @@ app.post('/api/llm-config', requireAdmin, (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // ── GET /api/baselines ─────────────────────────────────────
-app.get('/api/baselines', (req, res) => {
+app.get('/api/baselines', requireAuth, (req, res) => {
   try {
     if (!fs.existsSync(BASELINES_DIR)) {
       return res.json([]);
     }
 
+    const isAdmin = reqIsAdmin(req);
+    const ownedFiles = new Set(getOwnedFilenames('baselines', req.user.userId, isAdmin));
+
     const files = fs.readdirSync(BASELINES_DIR)
       .filter(f => /\.(png|jpg|jpeg)$/i.test(f))
+      .filter(f => isAdmin || ownedFiles.has(f))
       .map(f => {
         const stat = fs.statSync(path.join(BASELINES_DIR, f));
-        // Parse filename: testName_breakpoint.png
         const match = f.match(/^(.*)_(\d+px)\.(png|jpg|jpeg)$/i);
         return {
           filename: f,
@@ -165,7 +373,7 @@ app.get('/api/baselines', (req, res) => {
 });
 
 // ── POST /api/baselines/upload ─────────────────────────────
-app.post('/api/baselines/upload', upload.single('image'), (req, res) => {
+app.post('/api/baselines/upload', requireAuth, upload.single('image'), (req, res) => {
   try {
     const { testName, breakpoint } = req.body;
 
@@ -192,6 +400,9 @@ app.post('/api/baselines/upload', upload.single('image'), (req, res) => {
 
     fs.writeFileSync(filePath, req.file.buffer);
 
+    // Track ownership
+    setOwner('baselines', filename, req.user.userId);
+
     res.json({
       success: true,
       message: 'Baseline image uploaded successfully',
@@ -205,7 +416,7 @@ app.post('/api/baselines/upload', upload.single('image'), (req, res) => {
 });
 
 // ── DELETE /api/baselines/:filename ────────────────────────
-app.delete('/api/baselines/:filename', (req, res) => {
+app.delete('/api/baselines/:filename', requireAuth, (req, res) => {
   try {
     const fileName = req.params.filename;
 
@@ -227,19 +438,22 @@ app.delete('/api/baselines/:filename', (req, res) => {
 });
 
 // ── GET /api/tests ─────────────────────────────────────────
-// List all .test.yml files in the tests/ directory
-app.get('/api/tests', (req, res) => {
+// List test files owned by the current user (admin sees all)
+app.get('/api/tests', requireAuth, (req, res) => {
   try {
     if (!fs.existsSync(TESTS_DIR)) {
       fs.mkdirSync(TESTS_DIR, { recursive: true });
     }
 
+    const isAdmin = reqIsAdmin(req);
+    const ownedFiles = new Set(getOwnedFilenames('tests', req.user.userId, isAdmin));
+
     const files = fs.readdirSync(TESTS_DIR)
       .filter(f => f.endsWith('.test.yml'))
+      .filter(f => isAdmin || ownedFiles.has(f))
       .map(f => {
         const content = fs.readFileSync(path.join(TESTS_DIR, f), 'utf-8');
         const firstLine = content.split('\n')[0].trim().toLowerCase();
-        // Detect type: if first line starts with "name:" it's visual regression format
         const type = firstLine.startsWith('name:') ? 'visual-regression' : 'general';
         return { name: f, type };
       });
@@ -252,13 +466,16 @@ app.get('/api/tests', (req, res) => {
 });
 
 // ── GET /api/tests/:name ───────────────────────────────────
-// Read a single test file
-app.get('/api/tests/:name', (req, res) => {
+// Read a single test file (must be owner or admin)
+app.get('/api/tests/:name', requireAuth, (req, res) => {
   try {
     const fileName = req.params.name;
-    // Sanitize: prevent directory traversal
     if (fileName.includes('..') || fileName.includes('/')) {
       return res.status(400).json({ error: 'Invalid file name' });
+    }
+
+    if (!isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req))) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const filePath = path.join(TESTS_DIR, fileName);
@@ -276,7 +493,7 @@ app.get('/api/tests/:name', (req, res) => {
 
 // ── POST /api/tests ────────────────────────────────────────
 // Save (create or update) a test file
-app.post('/api/tests', (req, res) => {
+app.post('/api/tests', requireAuth, (req, res) => {
   try {
     const { name, content } = req.body;
 
@@ -303,6 +520,9 @@ app.post('/api/tests', (req, res) => {
     const filePath = path.join(TESTS_DIR, fileName);
     fs.writeFileSync(filePath, content, 'utf-8');
 
+    // Track ownership — creator owns it
+    setOwner('tests', fileName, req.user.userId);
+
     res.json({ success: true, message: `Test saved as ${fileName}`, fileName });
   } catch (err) {
     console.error('Failed to save test:', err);
@@ -311,13 +531,17 @@ app.post('/api/tests', (req, res) => {
 });
 
 // ── DELETE /api/tests/:name ────────────────────────────────
-// Delete a test file
-app.delete('/api/tests/:name', (req, res) => {
+// Delete a test file (must be owner or admin)
+app.delete('/api/tests/:name', requireAuth, (req, res) => {
   try {
     const fileName = req.params.name;
 
     if (fileName.includes('..') || fileName.includes('/')) {
       return res.status(400).json({ error: 'Invalid file name' });
+    }
+
+    if (!isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req))) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const filePath = path.join(TESTS_DIR, fileName);
@@ -326,6 +550,7 @@ app.delete('/api/tests/:name', (req, res) => {
     }
 
     fs.unlinkSync(filePath);
+    removeOwner('tests', fileName);
     res.json({ success: true, message: `Deleted ${fileName}` });
   } catch (err) {
     console.error('Failed to delete test:', err);
@@ -362,6 +587,7 @@ function resetRunnerState() {
   runnerState.status = 'idle';
   runnerState.runId = null;
   runnerState.testName = null;
+  runnerState.userId = null;
   runnerState.process = null;
   runnerState.logBuffer = [];
   runnerState.result = null;
@@ -392,7 +618,7 @@ function broadcastSSE(event, data) {
 }
 
 // ── POST /api/runner/run ───────────────────────────────────
-app.post('/api/runner/run', (req, res) => {
+app.post('/api/runner/run', requireAuth, (req, res) => {
   const { testName } = req.body;
 
   if (!testName) {
@@ -418,9 +644,11 @@ app.post('/api/runner/run', (req, res) => {
   runnerState.status = 'running';
   runnerState.runId = generateRunId();
   runnerState.testName = testName;
+  runnerState.userId = req.user.userId;
   runnerState.startedAt = Date.now();
 
   const currentRunId = runnerState.runId;
+  const currentUserId = req.user.userId;
 
   // Spawn the test runner as a child process
   const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
@@ -497,10 +725,36 @@ app.post('/api/runner/run', (req, res) => {
       console.error('Failed to find report:', err);
     }
 
+    // Attribute generated files to the user who triggered the run
+    if (currentUserId) {
+      // Attribute report
+      if (runnerState.reportFile) {
+        setOwner('reports', runnerState.reportFile, currentUserId);
+      }
+      // Attribute any screenshots/diffs created during this run
+      const runStart = runnerState.startedAt || 0;
+      for (const subdir of ['screenshots', 'diffs']) {
+        const dirPath = path.join(FILES_DIR, subdir);
+        if (fs.existsSync(dirPath)) {
+          const newFiles = fs.readdirSync(dirPath)
+            .filter(f => !f.startsWith('.'))
+            .filter(f => {
+              try {
+                return fs.statSync(path.join(dirPath, f)).mtimeMs >= runStart;
+              } catch { return false; }
+            });
+          for (const f of newFiles) {
+            setOwner('files', `${subdir}/${f}`, currentUserId);
+          }
+        }
+      }
+    }
+
     // Save to run history
     runHistory.unshift({
       runId: currentRunId,
       testName: runnerState.testName,
+      userId: currentUserId,
       result: runnerState.result,
       reportFile: runnerState.reportFile,
       startedAt: runnerState.startedAt,
@@ -534,7 +788,15 @@ app.post('/api/runner/run', (req, res) => {
 });
 
 // ── GET /api/runner/logs (SSE) ─────────────────────────────
-app.get('/api/runner/logs', (req, res) => {
+// SSE endpoint supports token via query param since EventSource can't send headers
+app.get('/api/runner/logs', (req, res, next) => {
+  // Accept token from query param or Authorization header
+  const token = req.query.token;
+  if (token && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${token}`;
+  }
+  requireAuth(req, res, next);
+}, (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -566,7 +828,7 @@ app.get('/api/runner/logs', (req, res) => {
 });
 
 // ── POST /api/runner/stop ──────────────────────────────────
-app.post('/api/runner/stop', (req, res) => {
+app.post('/api/runner/stop', requireAuth, (req, res) => {
   if (runnerState.status !== 'running' || !runnerState.process) {
     return res.status(400).json({ error: 'No test is currently running' });
   }
@@ -581,7 +843,7 @@ app.post('/api/runner/stop', (req, res) => {
 });
 
 // ── GET /api/runner/status ─────────────────────────────────
-app.get('/api/runner/status', (req, res) => {
+app.get('/api/runner/status', requireAuth, (req, res) => {
   res.json({
     status: runnerState.status,
     runId: runnerState.runId,
@@ -594,8 +856,12 @@ app.get('/api/runner/status', (req, res) => {
 });
 
 // ── GET /api/runner/history ────────────────────────────────
-app.get('/api/runner/history', (req, res) => {
-  res.json(runHistory);
+app.get('/api/runner/history', requireAuth, (req, res) => {
+  const isAdmin = reqIsAdmin(req);
+  const filtered = isAdmin
+    ? runHistory
+    : runHistory.filter(r => r.userId === req.user.userId);
+  res.json(filtered);
 });
 
 // ══════════════════════════════════════════════════════════
@@ -650,15 +916,19 @@ function parseReportMetadata(filePath) {
 }
 
 // ── GET /api/reports ───────────────────────────────────────
-app.get('/api/reports', (req, res) => {
+app.get('/api/reports', requireAuth, (req, res) => {
   try {
     if (!fs.existsSync(REPORTS_DIR)) {
       fs.mkdirSync(REPORTS_DIR, { recursive: true });
       return res.json([]);
     }
 
+    const isAdmin = reqIsAdmin(req);
+    const ownedFiles = new Set(getOwnedFilenames('reports', req.user.userId, isAdmin));
+
     const reports = fs.readdirSync(REPORTS_DIR)
       .filter(f => f.endsWith('.html'))
+      .filter(f => isAdmin || ownedFiles.has(f))
       .map(f => {
         const stat = fs.statSync(path.join(REPORTS_DIR, f));
         const meta = parseReportMetadata(path.join(REPORTS_DIR, f));
@@ -679,12 +949,16 @@ app.get('/api/reports', (req, res) => {
 });
 
 // ── DELETE /api/reports/:filename ──────────────────────────
-app.delete('/api/reports/:filename', (req, res) => {
+app.delete('/api/reports/:filename', requireAuth, (req, res) => {
   try {
     const fileName = req.params.filename;
 
     if (fileName.includes('..') || fileName.includes('/')) {
       return res.status(400).json({ error: 'Invalid file name' });
+    }
+
+    if (!isOwnerOrAdmin('reports', fileName, req.user.userId, reqIsAdmin(req))) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const filePath = path.join(REPORTS_DIR, fileName);
@@ -693,6 +967,7 @@ app.delete('/api/reports/:filename', (req, res) => {
     }
 
     fs.unlinkSync(filePath);
+    removeOwner('reports', fileName);
     res.json({ success: true, message: `Deleted ${fileName}` });
   } catch (err) {
     console.error('Failed to delete report:', err);
@@ -755,7 +1030,7 @@ function readDirTree(dirPath, relativeTo) {
 // ── GET /api/files/browse ──────────────────────────────────
 // Browse a specific folder path within the files directory.
 // Query params: ?folder=screenshots/subfolder (optional, defaults to root)
-app.get('/api/files/browse', (req, res) => {
+app.get('/api/files/browse', requireAuth, (req, res) => {
   try {
     const folder = req.query.folder || '';
 
@@ -779,6 +1054,7 @@ app.get('/api/files/browse', (req, res) => {
 
     const entries = fs.readdirSync(targetDir, { withFileTypes: true });
     const items = [];
+    const isAdmin = reqIsAdmin(req);
 
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue;
@@ -798,6 +1074,19 @@ app.get('/api/files/browse', (req, res) => {
           type: 'folder'
         });
       } else {
+        // Check ownership: use 'baselines' category for baselines folder,
+        // 'files' category (with relative path) for everything else
+        const isBaseline = (folder === 'baselines' || folder?.startsWith('baselines/'));
+        let hasAccess = isAdmin;
+        if (!hasAccess) {
+          if (isBaseline) {
+            hasAccess = isOwnerOrAdmin('baselines', entry.name, req.user.userId, false);
+          } else {
+            hasAccess = isOwnerOrAdmin('files', relPath, req.user.userId, false);
+          }
+        }
+        if (!hasAccess) continue;
+
         const stat = fs.statSync(fullPath);
         items.push({
           name: entry.name,
@@ -842,7 +1131,7 @@ app.get('/api/files/browse', (req, res) => {
 
 // ── GET /api/files/preview/:filePath(*) ────────────────────
 // Serve a file for inline preview. Only allows files inside FILES_DIR.
-app.get('/api/files/preview/{*filePath}', (req, res) => {
+app.get('/api/files/preview/{*filePath}', requireAuth, (req, res) => {
   try {
     // Express 5 + path-to-regexp 8.x returns wildcard as array of segments
     const filePath = Array.isArray(req.params.filePath)
@@ -894,7 +1183,7 @@ app.get('/api/files/preview/{*filePath}', (req, res) => {
 
 // ── DELETE /api/files/:filePath(*) ─────────────────────────
 // Delete a specific file within files directory.
-app.delete('/api/files/delete/{*filePath}', (req, res) => {
+app.delete('/api/files/delete/{*filePath}', requireAuth, (req, res) => {
   try {
     // Express 5 + path-to-regexp 8.x returns wildcard as array of segments
     const filePath = Array.isArray(req.params.filePath)
@@ -922,7 +1211,16 @@ app.delete('/api/files/delete/{*filePath}', (req, res) => {
       return res.status(400).json({ error: 'Cannot delete directories through this endpoint' });
     }
 
+    // Check ownership: baselines use 'baselines' category, others use 'files'
+    const isBaseline = filePath.startsWith('baselines/');
+    const ownerCategory = isBaseline ? 'baselines' : 'files';
+    const ownerKey = isBaseline ? path.basename(filePath) : filePath;
+    if (!isOwnerOrAdmin(ownerCategory, ownerKey, req.user.userId, reqIsAdmin(req))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     fs.unlinkSync(fullPath);
+    removeOwner(ownerCategory, ownerKey);
     res.json({ success: true, message: `Deleted ${filePath}` });
   } catch (err) {
     console.error('Failed to delete file:', err);
@@ -931,6 +1229,21 @@ app.delete('/api/files/delete/{*filePath}', (req, res) => {
 });
 
 // ── Start server ───────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+async function startServer() {
+  await initializeAuth();
+
+  // Migrate any pre-existing files to admin ownership
+  migrateExistingFiles(
+    { tests: TESTS_DIR, reports: REPORTS_DIR, baselines: BASELINES_DIR, files: FILES_DIR },
+    'admin-001'
+  );
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
