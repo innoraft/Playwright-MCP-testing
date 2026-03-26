@@ -12,21 +12,45 @@ yarn-debug.log*
 yarn-error.log*
 
 # --------------------
-# Tests
+# Environment variables
+# --------------------
+.env
+.env.*
+
+# --------------------
+# Tests (runtime-generated YAML)
 # --------------------
 /tests
-screenshots/
+
+# --------------------
+# Test reports (runtime-generated HTML)
+# --------------------
 test-reports/
 
 # --------------------
 # files (runtime only)
-# Keep directory structure
+# Keep directory structure via .gitkeep
 # --------------------
 files/uploads/*
 !files/uploads/.gitkeep
 files/baselines/*
 !files/baselines/.gitkeep
 files/diffs/*
+!files/diffs/.gitkeep
+files/screenshots/*
+!files/screenshots/.gitkeep
+
+# --------------------
+# Config (sensitive / per-deployment)
+# --------------------
+config/llm.config.json
+config/users.json
+config/ownership.json
+
+# --------------------
+# Build output
+# --------------------
+client/dist/
 
 # --------------------
 # Cache / temp
@@ -39,6 +63,7 @@ temp/
 # OS / Editor noise
 # --------------------
 .DS_Store
+Thumbs.db
 .vscode/
 .idea/
 *.swp

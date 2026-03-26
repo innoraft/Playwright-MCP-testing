@@ -439,6 +439,7 @@ export class TestReportGenerator {
             <button class="filter-btn active" onclick="filterActions('all')">All</button>
             <button class="filter-btn" onclick="filterActions('passed')">Passed</button>
             <button class="filter-btn" onclick="filterActions('failed')">Failed</button>
+            <button class="filter-btn" onclick="filterActions('assertions')">Assertions</button>
             <button class="filter-btn" onclick="filterActions('visual')">Visual Checks</button>
           </div>
         </div>
@@ -448,9 +449,11 @@ export class TestReportGenerator {
             const isVR = action.tool === 'visual_regression_check';
             const dataStatus = isVR ? `${action.status} visual` : action.status;
 
+            const isAssertion = /assert|expect|verify|check|validate/i.test(action.tool);
+
             return `
-            <div class="action-item ${action.status}${isVR ? ' vr-action' : ''}"
-                 data-status="${dataStatus}">
+            <div class="action-item ${action.status}${isVR ? ' vr-action' : ''}${action.status === 'failed' ? ' expanded' : ''}"
+                 data-status="${dataStatus}${isAssertion ? ' assertion' : ''}">
               <div class="action-header" onclick="toggleAction(${idx})">
                 <div class="action-title">
                   <div class="action-number">${idx + 1}</div>
@@ -550,6 +553,7 @@ export class TestReportGenerator {
           const show = status === 'all'
             || ds === status
             || (status === 'visual' && ds.includes('visual'))
+            || (status === 'assertions' && ds.includes('assertion'))
             || (status === 'passed' && ds.startsWith('passed'))
             || (status === 'failed' && ds.startsWith('failed'));
           action.style.display = show ? 'block' : 'none';

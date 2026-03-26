@@ -75,6 +75,7 @@ class StatelessMCPRunner {
   /**
    * Extracts the most relevant screenshot file path from an MCP tool result.
    * Scans text output for image filenames emitted by Playwright.
+   * If the file landed in /files root (MCP default), moves it to /files/screenshots.
    *
    * @param {Object} result - MCP tool execution result
    * @returns {string|null} Absolute screenshot path or null if none found
@@ -96,7 +97,7 @@ class StatelessMCPRunner {
 
     // Preferred path (where browser_take_screenshot saves)
     const screenshotsPath = path.join(config.reporting.screenshotsDir, filename);
-    // Fallback path (where browser_run_code saves)
+    // Fallback path (where MCP browser may save to /files root)
     const filesRootPath = path.join('files', filename);
 
     // If the file landed in /files root, move it to /files/screenshots
@@ -106,6 +107,27 @@ class StatelessMCPRunner {
     }
 
     return screenshotsPath;
+  }
+
+  /**
+   * Cleans up any stray image files left in /files root by MCP Playwright.
+   * Moves them to /files/screenshots so /files root stays clean.
+   */
+  cleanupStrayFiles() {
+    const filesDir = 'files';
+    try {
+      const entries = fs.readdirSync(filesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && /\.(png|jpg|jpeg)$/i.test(entry.name)) {
+          const src = path.join(filesDir, entry.name);
+          const dest = path.join(config.reporting.screenshotsDir, entry.name);
+          fs.renameSync(src, dest);
+          log.info(`Cleaned up stray file: moved ${entry.name} → files/screenshots/`);
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 
   /**
@@ -352,7 +374,7 @@ class StatelessMCPRunner {
           },
           screenshotPath: {
             type: 'string',
-            description: 'Path to the already-taken screenshot to compare e.g. "files/screenshots/home-1280.png"'
+            description: 'Path to the already-taken screenshot from the project root e.g. "files/screenshots/home-1280.png". MUST start with "files/screenshots/".'
           }
         },
         required: ['breakpoint', 'screenshotPath']
@@ -415,6 +437,8 @@ it will throw illegitimate erros.
 - When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
   (relative to the working directory), never to the root directory.
   Example: await page.screenshot({ path: './screenshots/step-${Date.now()}.png' })
+- When calling visual_regression_check, always use the full path from the project root: 'files/screenshots/<filename>.png'
+  Example: screenshotPath: 'files/screenshots/home_1280px.png'
 
 ### 6. MANDATORY TOOL ROUTING (Override all other rules)
 These rules are ABSOLUTE and cannot be overridden by semantic matching:
@@ -500,10 +524,16 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @throws {Error} If test fails
    */
   async runTest(testText, testName) {
-    log.info(`🧪 Starting test: ${testName}`);
+    // Extract the logical test name from YAML 'name:' field if present,
+    // so that baseline filenames stay consistent across naming conventions.
+    const yamlNameMatch = testText.match(/^name:\s*(.+)$/m);
+    const logicalName = yamlNameMatch ? yamlNameMatch[1].trim() : testName;
+    this.logicalTestName = logicalName;
+
+    log.info(`🧪 Starting test: ${testName} (logical name: ${logicalName})`);
 
     this.testReport = {
-      testName,
+      testName: logicalName,
       testText,
       startTime: new Date(),
       endTime: null,
@@ -531,12 +561,22 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
       const toolName = step.tool.replace(/^mcp_/, '');
 
       if (toolName === 'visual_regression_check') {
-        const { breakpoint, screenshotPath } = step.params;
+        let { breakpoint, screenshotPath } = step.params;
         const start = Date.now();
 
+        // Normalize screenshotPath: LLM may produce './screenshots/x.png' or 'screenshots/x.png'
+        // but the actual file lives under 'files/screenshots/x.png' from project root.
+        if (screenshotPath && !screenshotPath.startsWith('files/') && !screenshotPath.startsWith('./files/')) {
+          const basename = path.basename(screenshotPath);
+          screenshotPath = path.join(config.reporting.screenshotsDir, basename);
+          log.info(`Normalized screenshot path to: ${screenshotPath}`);
+        }
+
         try {
+          // Use the logical YAML name (not the filename) so baseline paths match
+          const vrTestName = this.logicalTestName || testName;
           const result = this.visualChecker.runRegressionStep(
-            testName,
+            vrTestName,
             breakpoint,
             screenshotPath
           );
@@ -751,6 +791,7 @@ async function main() {
       log.error(`❌ Test FAILED: ${testName}`, err.message + '\n');
 
     } finally {
+      runner.cleanupStrayFiles();
       await runner.cleanup();
     }
   }
