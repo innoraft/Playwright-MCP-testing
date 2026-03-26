@@ -29,7 +29,16 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, server-to-server) or any localhost port
+    if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // ── Static serving for test reports & images ────────────────
@@ -331,19 +340,33 @@ app.delete('/api/tests/:name', (req, res) => {
 // ── Runner state ───────────────────────────────────────────
 let runnerState = {
   status: 'idle',        // 'idle' | 'running'
+  runId: null,           // unique run ID for tracking
+  testName: null,        // name of test being run
   process: null,         // child process reference
   logBuffer: [],         // buffered log lines
   sseClients: [],        // connected SSE clients
   result: null,          // 'passed' | 'failed' | null
-  reportFile: null       // latest report filename
+  reportFile: null,      // latest report filename
+  startedAt: null        // run start time
 };
+
+// Run history — stores completed runs for lookup
+const runHistory = [];
+const MAX_HISTORY = 50;
+
+function generateRunId() {
+  return `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function resetRunnerState() {
   runnerState.status = 'idle';
+  runnerState.runId = null;
+  runnerState.testName = null;
   runnerState.process = null;
   runnerState.logBuffer = [];
   runnerState.result = null;
   runnerState.reportFile = null;
+  runnerState.startedAt = null;
 }
 
 // ── Log type detection ─────────────────────────────────────
@@ -393,6 +416,11 @@ app.post('/api/runner/run', (req, res) => {
   // Reset state for new run
   resetRunnerState();
   runnerState.status = 'running';
+  runnerState.runId = generateRunId();
+  runnerState.testName = testName;
+  runnerState.startedAt = Date.now();
+
+  const currentRunId = runnerState.runId;
 
   // Spawn the test runner as a child process
   const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
@@ -469,7 +497,21 @@ app.post('/api/runner/run', (req, res) => {
       console.error('Failed to find report:', err);
     }
 
+    // Save to run history
+    runHistory.unshift({
+      runId: currentRunId,
+      testName: runnerState.testName,
+      result: runnerState.result,
+      reportFile: runnerState.reportFile,
+      startedAt: runnerState.startedAt,
+      finishedAt: Date.now(),
+      exitCode: code,
+      logCount: runnerState.logBuffer.length
+    });
+    if (runHistory.length > MAX_HISTORY) runHistory.pop();
+
     broadcastSSE('done', {
+      runId: currentRunId,
       result: runnerState.result,
       reportFile: runnerState.reportFile,
       exitCode: code
@@ -485,10 +527,10 @@ app.post('/api/runner/run', (req, res) => {
     const logEntry = { line: `Process error: ${err.message}`, type: 'fail', timestamp: Date.now() };
     runnerState.logBuffer.push(logEntry);
     broadcastSSE('log', logEntry);
-    broadcastSSE('done', { result: 'failed', reportFile: null, exitCode: -1 });
+    broadcastSSE('done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
   });
 
-  res.json({ success: true, message: `Running test: ${testName}` });
+  res.json({ success: true, message: `Running test: ${testName}`, runId: currentRunId });
 });
 
 // ── GET /api/runner/logs (SSE) ─────────────────────────────
@@ -508,6 +550,7 @@ app.get('/api/runner/logs', (req, res) => {
   // If run already finished, send done immediately
   if (runnerState.status === 'idle' && runnerState.result) {
     res.write(`event: done\ndata: ${JSON.stringify({
+      runId: runnerState.runId,
       result: runnerState.result,
       reportFile: runnerState.reportFile
     })}\n\n`);
@@ -541,10 +584,18 @@ app.post('/api/runner/stop', (req, res) => {
 app.get('/api/runner/status', (req, res) => {
   res.json({
     status: runnerState.status,
+    runId: runnerState.runId,
+    testName: runnerState.testName,
     result: runnerState.result,
     reportFile: runnerState.reportFile,
-    logCount: runnerState.logBuffer.length
+    logCount: runnerState.logBuffer.length,
+    startedAt: runnerState.startedAt
   });
+});
+
+// ── GET /api/runner/history ────────────────────────────────
+app.get('/api/runner/history', (req, res) => {
+  res.json(runHistory);
 });
 
 // ══════════════════════════════════════════════════════════
@@ -793,7 +844,10 @@ app.get('/api/files/browse', (req, res) => {
 // Serve a file for inline preview. Only allows files inside FILES_DIR.
 app.get('/api/files/preview/{*filePath}', (req, res) => {
   try {
-    const filePath = req.params.filePath;
+    // Express 5 + path-to-regexp 8.x returns wildcard as array of segments
+    const filePath = Array.isArray(req.params.filePath)
+      ? req.params.filePath.join('/')
+      : req.params.filePath;
 
     if (!filePath || filePath.includes('..')) {
       return res.status(400).json({ error: 'Invalid file path' });
@@ -842,7 +896,10 @@ app.get('/api/files/preview/{*filePath}', (req, res) => {
 // Delete a specific file within files directory.
 app.delete('/api/files/delete/{*filePath}', (req, res) => {
   try {
-    const filePath = req.params.filePath;
+    // Express 5 + path-to-regexp 8.x returns wildcard as array of segments
+    const filePath = Array.isArray(req.params.filePath)
+      ? req.params.filePath.join('/')
+      : req.params.filePath;
 
     if (!filePath || filePath.includes('..')) {
       return res.status(400).json({ error: 'Invalid file path' });

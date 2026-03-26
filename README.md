@@ -21,37 +21,48 @@ A powerful, AI-driven test automation framework that combines the Model Context 
 
 ## 🛠️ Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/innoraft/Playwright-MCP-testing.git
-cd Playwright-MCP-testing
-```
+### Quick Start (3 Steps)
 
-2. Install dependencies:
+1. **Install runner + backend dependencies** (from project root):
 ```bash
 npm install
 ```
 
-3. Set up your configuration:
-
-Open the configuration file:
+2. **Install frontend dependencies**:
 ```bash
-config/llm.config.js
+cd client && npm install
 ```
 
-Update it with your LLM provider and API key:
+3. **Configure your LLM provider** — open `config/llm.config.js` and add your API key:
 
 ```javascript
 const llmConfig = {
   provider: 'openai',
-   model: '', //Use new models, (e.g.: For openai, use gpt-5.1-codex-max. If facing any problem use gpt-5.)
-  apiKey: "your-api-key-here",
+  model: '', // Use new models (e.g. gpt-5.1-codex-max or gpt-5)
+  apiKey: 'your-api-key-here',
   temperature: 1
 };
 
 export default llmConfig;
 ```
 
+> No Docker, database, or cloud account required to get started.
+
+### Starting the Platform
+
+Open **two terminal windows**:
+
+**Terminal 1 — Backend server:**
+```bash
+node server/index.js
+```
+Server starts on `http://localhost:3001`.
+
+**Terminal 2 — Frontend dev server:**
+```bash
+cd client && npm run dev
+```
+Frontend opens on `http://localhost:5173`.
 ## 📝 Usage
 
 ### Basic Test Creation
@@ -71,11 +82,23 @@ Take a screenshot of the dashboard
 
 ### Running Tests
 
-Execute your test with:
+Execute a single test:
 
 ```bash
 node ai_test_runner.js tests/simple-test.test.yml
 ```
+
+Run all tests in a folder:
+
+```bash
+node ai_test_runner.js tests/
+```
+
+When running a folder, the runner:
+- Discovers all `.yml` / `.yaml` files automatically
+- Executes them in alphabetical order
+- Prints a summary with total / passed / failed counts
+- Exits with code `1` if any test fails (CI-compatible)
 
 ### Uploading media
 
