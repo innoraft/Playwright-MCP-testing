@@ -649,6 +649,230 @@ app.delete('/api/reports/:filename', (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════
+//  FILES & ASSET BROWSER ENDPOINTS (EPIC-07)
+// ══════════════════════════════════════════════════════════
+
+const ALLOWED_ASSET_FOLDERS = ['screenshots', 'baselines', 'diffs', 'uploads'];
+
+/**
+ * Recursively read a directory and return a tree of files and folders.
+ * Only traverses directories within the allowed asset folders.
+ */
+function readDirTree(dirPath, relativeTo) {
+  const items = [];
+  if (!fs.existsSync(dirPath)) return items;
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    // Skip hidden files
+    if (entry.name.startsWith('.')) continue;
+
+    const fullPath = path.join(dirPath, entry.name);
+    const relPath = path.relative(relativeTo, fullPath);
+
+    if (entry.isDirectory()) {
+      items.push({
+        name: entry.name,
+        path: relPath,
+        type: 'folder',
+        children: readDirTree(fullPath, relativeTo)
+      });
+    } else {
+      const stat = fs.statSync(fullPath);
+      items.push({
+        name: entry.name,
+        path: relPath,
+        type: 'file',
+        sizeBytes: stat.size,
+        modified: stat.mtimeMs,
+        extension: path.extname(entry.name).toLowerCase().replace('.', '')
+      });
+    }
+  }
+
+  // Sort: folders first, then files, alphabetically within each group
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return items;
+}
+
+// ── GET /api/files/browse ──────────────────────────────────
+// Browse a specific folder path within the files directory.
+// Query params: ?folder=screenshots/subfolder (optional, defaults to root)
+app.get('/api/files/browse', (req, res) => {
+  try {
+    const folder = req.query.folder || '';
+
+    // Security: prevent directory traversal
+    if (folder.includes('..')) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    const targetDir = folder ? path.join(FILES_DIR, folder) : FILES_DIR;
+
+    // Ensure target is within FILES_DIR
+    const resolvedTarget = path.resolve(targetDir);
+    const resolvedFiles = path.resolve(FILES_DIR);
+    if (!resolvedTarget.startsWith(resolvedFiles)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    const items = [];
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+
+      // At root level, only show allowed asset folders
+      if (!folder && entry.isDirectory() && !ALLOWED_ASSET_FOLDERS.includes(entry.name)) {
+        continue;
+      }
+
+      const fullPath = path.join(targetDir, entry.name);
+      const relPath = folder ? `${folder}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        items.push({
+          name: entry.name,
+          path: relPath,
+          type: 'folder'
+        });
+      } else {
+        const stat = fs.statSync(fullPath);
+        items.push({
+          name: entry.name,
+          path: relPath,
+          type: 'file',
+          sizeBytes: stat.size,
+          modified: stat.mtimeMs,
+          extension: path.extname(entry.name).toLowerCase().replace('.', '')
+        });
+      }
+    }
+
+    // Sort: folders first, then files
+    items.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    // Build breadcrumbs
+    const breadcrumbs = [{ name: 'Files', path: '' }];
+    if (folder) {
+      const parts = folder.split('/');
+      let accumulated = '';
+      for (const part of parts) {
+        accumulated = accumulated ? `${accumulated}/${part}` : part;
+        breadcrumbs.push({ name: part, path: accumulated });
+      }
+    }
+
+    res.json({
+      currentPath: folder || '',
+      breadcrumbs,
+      items,
+      totalFiles: items.filter(i => i.type === 'file').length,
+      totalFolders: items.filter(i => i.type === 'folder').length
+    });
+  } catch (err) {
+    console.error('Failed to browse files:', err);
+    res.status(500).json({ error: 'Failed to browse directory' });
+  }
+});
+
+// ── GET /api/files/preview/:filePath(*) ────────────────────
+// Serve a file for inline preview. Only allows files inside FILES_DIR.
+app.get('/api/files/preview/{*filePath}', (req, res) => {
+  try {
+    const filePath = req.params.filePath;
+
+    if (!filePath || filePath.includes('..')) {
+      return res.status(400).json({ error: 'Invalid file path' });
+    }
+
+    const fullPath = path.join(FILES_DIR, filePath);
+
+    // Ensure within FILES_DIR
+    const resolvedPath = path.resolve(fullPath);
+    if (!resolvedPath.startsWith(path.resolve(FILES_DIR))) {
+      return res.status(400).json({ error: 'Invalid file path' });
+    }
+
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const ext = path.extname(fullPath).toLowerCase();
+    const mimeTypes = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      '.bmp': 'image/bmp',
+      '.txt': 'text/plain',
+      '.json': 'application/json',
+      '.yml': 'text/yaml',
+      '.yaml': 'text/yaml',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.js': 'text/javascript'
+    };
+
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.sendFile(resolvedPath);
+  } catch (err) {
+    console.error('Failed to preview file:', err);
+    res.status(500).json({ error: 'Failed to preview file' });
+  }
+});
+
+// ── DELETE /api/files/:filePath(*) ─────────────────────────
+// Delete a specific file within files directory.
+app.delete('/api/files/delete/{*filePath}', (req, res) => {
+  try {
+    const filePath = req.params.filePath;
+
+    if (!filePath || filePath.includes('..')) {
+      return res.status(400).json({ error: 'Invalid file path' });
+    }
+
+    const fullPath = path.join(FILES_DIR, filePath);
+
+    // Ensure within FILES_DIR
+    const resolvedPath = path.resolve(fullPath);
+    if (!resolvedPath.startsWith(path.resolve(FILES_DIR))) {
+      return res.status(400).json({ error: 'Invalid file path' });
+    }
+
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      return res.status(400).json({ error: 'Cannot delete directories through this endpoint' });
+    }
+
+    fs.unlinkSync(fullPath);
+    res.json({ success: true, message: `Deleted ${filePath}` });
+  } catch (err) {
+    console.error('Failed to delete file:', err);
+    res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
 // ── Start server ───────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

@@ -4,6 +4,7 @@ import TestSuites from './pages/TestSuites';
 import TestRunner from './pages/TestRunner';
 import Reports from './pages/Reports';
 import BaselineManager from './pages/BaselineManager';
+import FileBrowser from './pages/FileBrowser';
 import './index.css';
 
 function App() {
@@ -76,6 +77,13 @@ function App() {
             <span className="sidebar-link-icon">🖼️</span>
             Baselines
           </button>
+          <button
+            className={`sidebar-link ${activePage === 'files' ? 'active' : ''}`}
+            onClick={() => handlePageChange('files')}
+          >
+            <span className="sidebar-link-icon">📂</span>
+            Files & Assets
+          </button>
           
           <div className="sidebar-section-label">Settings</div>
           <button className="sidebar-link" disabled style={{ opacity: 0.4 }}>
@@ -96,6 +104,7 @@ function App() {
         {activePage === 'test-runner' && <TestRunner onNavigateToReport={handleNavigateToReport} />}
         {activePage === 'reports' && <Reports initialReport={pendingReport} />}
         {activePage === 'baselines' && <BaselineManager />}
+        {activePage === 'files' && <FileBrowser />}
       </main>
     </div>
   );
