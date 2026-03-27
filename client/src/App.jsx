@@ -63,7 +63,7 @@ function App() {
           <div className="sidebar-logo">
             <div className="sidebar-logo-icon">⚡</div>
             <div>
-              <div className="sidebar-logo-text">TestPilot AI</div>
+              <div className="sidebar-logo-text">AI testing</div>
             </div>
             <span className="sidebar-logo-badge">Pro</span>
           </div>

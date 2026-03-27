@@ -72,7 +72,7 @@ export default function Login() {
           <div className="login-logo">
             <div className="sidebar-logo-icon" style={{ width: 48, height: 48, fontSize: 24 }}>⚡</div>
           </div>
-          <h1 className="login-title">TestPilot AI</h1>
+          <h1 className="login-title">AI testing</h1>
           <p className="login-subtitle">
             {view === 'login' && 'Sign in to your account'}
             {view === 'forgot' && 'Request a password reset'}
