@@ -59,7 +59,12 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+    // Allow same-origin requests (no origin header), localhost dev, and production domain
+    const allowed = [
+      /^https?:\/\/localhost(:\d+)?$/,
+      /^https?:\/\/ai-testing\.innoraft-sites\.com$/,
+    ];
+    if (!origin || allowed.some(pattern => pattern.test(origin))) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
