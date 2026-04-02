@@ -16,6 +16,7 @@ import { TestReportGenerator } from './test-report-generator.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
 import llmConfig from './config/llm.config.js';
@@ -179,12 +180,52 @@ class StatelessMCPRunner {
     fs.mkdirSync(screenshotsDir, { recursive: true });
     fs.mkdirSync(uploadsDir, { recursive: true });
 
+    // Resolve Chromium executable path dynamically
+    let chromiumPath;
+
+    // 1. Try playwright-core's reported path
+    try {
+      const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8' }).trim();
+      if (reported && fs.existsSync(reported)) chromiumPath = reported;
+    } catch { /* ignore */ }
+
+    // 2. Scan ms-playwright cache for any installed chromium
+    if (!chromiumPath) {
+      const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
+      try {
+        const dirs = fs.readdirSync(cacheDir)
+          .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
+          .sort()
+          .reverse(); // newest first
+        for (const dir of dirs) {
+          // Newer Playwright uses chrome-linux64, older uses chrome-linux
+          const candidates = [
+            path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
+            path.join(cacheDir, dir, 'chrome-linux', 'chrome'),
+          ];
+          const found = candidates.find(p => fs.existsSync(p));
+          if (found) { chromiumPath = found; break; }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 3. Fallback to system-installed chromium
+    if (!chromiumPath) {
+      const fallbacks = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+      chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
+    }
+
+    if (!chromiumPath || !fs.existsSync(chromiumPath)) {
+      throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
+    }
+    log.info(`Using Chromium at: ${chromiumPath}`);
+
     const transport = new StdioClientTransport({
       command: 'npx',
       cwd: workspaceDir,
       args: [
         '@playwright/mcp@latest',
-        '--browser', 'chrome',
+        '--executable-path', chromiumPath,
         '--ignore-https-errors',
         '--output-dir', 'screenshots',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
