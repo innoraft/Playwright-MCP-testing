@@ -15,12 +15,14 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { TestReportGenerator } from './test-report-generator.js';
 import fs from 'fs';
 import path from 'path';
+import net from 'net';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync, spawn as cpSpawn } from 'child_process';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
 import llmConfig from './config/llm.config.js';
 import { VisualRegressionChecker } from './visual-regression.js';
+import WebSocket from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,6 +73,13 @@ class StatelessMCPRunner {
     });
 
     this.visualChecker = new VisualRegressionChecker();
+
+    // CDP Screencast state
+    this.cdpPort = null;
+    this.browserProcess = null;
+    this.cdpSocket = null;
+    this.screencastActive = false;
+    this.chromiumPath = null;
   }
 
   /**
@@ -163,6 +172,177 @@ class StatelessMCPRunner {
   }
 
   /**
+   * Finds a free TCP port on localhost.
+   * @returns {Promise<number>} A free port number
+   */
+  findFreePort() {
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const port = srv.address().port;
+        srv.close(() => resolve(port));
+      });
+      srv.on('error', reject);
+    });
+  }
+
+  /**
+   * Launches Chromium with --remote-debugging-port so we can
+   * attach CDP screencast AND let @playwright/mcp connect via --cdp-endpoint.
+   *
+   * @param {string} chromiumPath - Absolute path to Chromium binary
+   * @returns {Promise<number>} The allocated CDP port
+   */
+  async launchBrowserWithCDP(chromiumPath) {
+    const port = await this.findFreePort();
+    this.cdpPort = port;
+    this.chromiumPath = chromiumPath;
+
+    const args = [
+      `--remote-debugging-port=${port}`,
+      '--headless=new',
+      '--disable-gpu',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      `--window-size=${config.browser.viewport.width},${config.browser.viewport.height}`,
+      'about:blank'
+    ];
+
+    log.info(`Launching Chromium with CDP on port ${port}`);
+    this.browserProcess = cpSpawn(chromiumPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    // Wait for CDP to be ready by polling the /json/version endpoint
+    const startTime = Date.now();
+    const timeout = 15000;
+    while (Date.now() - startTime < timeout) {
+      try {
+        const resp = await fetch(`http://127.0.0.1:${port}/json/version`);
+        if (resp.ok) {
+          const info = await resp.json();
+          log.success(`Chromium CDP ready: ${info.Browser}`);
+          return port;
+        }
+      } catch { /* not ready yet */ }
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    throw new Error('Chromium failed to start with CDP within 15 seconds');
+  }
+
+  /**
+   * Connects to CDP and starts Page.startScreencast.
+   * Emits frames to stdout with __SCREENCAST_FRAME__ prefix for the server to pick up.
+   */
+  async startScreencast() {
+    if (!this.cdpPort) {
+      log.warn('No CDP port available, skipping screencast');
+      return;
+    }
+
+    try {
+      // Poll /json to find a page target
+      let pageWsUrl = null;
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          const resp = await fetch(`http://127.0.0.1:${this.cdpPort}/json`);
+          const targets = await resp.json();
+          const page = targets.find(t => t.type === 'page');
+          if (page && page.webSocketDebuggerUrl) {
+            pageWsUrl = page.webSocketDebuggerUrl;
+            break;
+          }
+        } catch { /* retry */ }
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      if (!pageWsUrl) {
+        log.warn('No page target found for screencast');
+        return;
+      }
+
+      log.info(`Connecting CDP screencast to: ${pageWsUrl}`);
+      this.cdpSocket = new WebSocket(pageWsUrl);
+
+      await new Promise((resolve, reject) => {
+        this.cdpSocket.on('open', resolve);
+        this.cdpSocket.on('error', reject);
+        setTimeout(() => reject(new Error('CDP WebSocket timeout')), 5000);
+      });
+
+      let msgId = 1;
+
+      // Start screencast: JPEG, quality 40, capped at viewport size, every other frame
+      this.cdpSocket.send(JSON.stringify({
+        id: msgId++,
+        method: 'Page.startScreencast',
+        params: {
+          format: 'jpeg',
+          quality: 40,
+          maxWidth: config.browser.viewport.width,
+          maxHeight: config.browser.viewport.height,
+          everyNthFrame: 2
+        }
+      }));
+
+      this.screencastActive = true;
+
+      this.cdpSocket.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.method === 'Page.screencastFrame') {
+            // Acknowledge the frame so CDP keeps sending
+            this.cdpSocket.send(JSON.stringify({
+              id: msgId++,
+              method: 'Page.screencastFrameAck',
+              params: { sessionId: msg.params.sessionId }
+            }));
+
+            // Emit frame data via stdout for the server to detect
+            process.stdout.write(`__SCREENCAST_FRAME__${msg.params.data}\n`);
+          }
+        } catch { /* ignore parse errors */ }
+      });
+
+      this.cdpSocket.on('close', () => {
+        this.screencastActive = false;
+        log.info('CDP screencast connection closed');
+      });
+
+      this.cdpSocket.on('error', (err) => {
+        log.warn(`CDP screencast error: ${err.message}`);
+        this.screencastActive = false;
+      });
+
+      log.success('CDP screencast started');
+    } catch (err) {
+      log.warn(`Failed to start screencast: ${err.message}`);
+    }
+  }
+
+  /**
+   * Stops the CDP screencast and closes the WebSocket.
+   */
+  async stopScreencast() {
+    if (this.cdpSocket && this.screencastActive) {
+      try {
+        this.cdpSocket.send(JSON.stringify({
+          id: 9999,
+          method: 'Page.stopScreencast'
+        }));
+      } catch { /* ignore */ }
+    }
+    if (this.cdpSocket) {
+      try { this.cdpSocket.close(); } catch { /* ignore */ }
+      this.cdpSocket = null;
+    }
+    this.screencastActive = false;
+  }
+
+  /**
    * Initializes the MCP client connection and discovers available tools.
    * Also ensures screenshot output directories exist.
    *
@@ -220,21 +400,22 @@ class StatelessMCPRunner {
     }
     log.info(`Using Chromium at: ${chromiumPath}`);
 
+    // Launch Chromium with CDP and connect MCP to it
+    await this.launchBrowserWithCDP(chromiumPath);
+
     const transport = new StdioClientTransport({
       command: 'npx',
       cwd: workspaceDir,
       args: [
         '@playwright/mcp@latest',
-        '--executable-path', chromiumPath,
+        '--cdp-endpoint', `http://127.0.0.1:${this.cdpPort}`,
         '--ignore-https-errors',
         '--output-dir', 'screenshots',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
       env: {
-        ...process.env,
-        PLAYWRIGHT_HEADLESS: config.browser.headless ? '1' : '0',
-        DISPLAY: process.env.DISPLAY || ':0'
+        ...process.env
       }
     });
 
@@ -257,6 +438,9 @@ class StatelessMCPRunner {
         inputSchema: tool.inputSchema
       });
     }
+
+    // Start CDP screencast for live monitoring
+    await this.startScreencast();
 
     return this.mcpTools;
   }
@@ -715,9 +899,26 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @returns {Promise<void>}
    */
   async cleanup() {
+    // Stop screencast first
+    await this.stopScreencast();
+
     if (this.mcpClient) {
       await this.mcpClient.close();
       log.info('MCP connection closed');
+    }
+
+    // Kill the browser process we launched
+    if (this.browserProcess) {
+      try {
+        this.browserProcess.kill('SIGTERM');
+        // Give it a moment to exit gracefully, then force kill
+        await new Promise(r => setTimeout(r, 2000));
+        if (!this.browserProcess.killed) {
+          this.browserProcess.kill('SIGKILL');
+        }
+      } catch { /* ignore */ }
+      this.browserProcess = null;
+      log.info('Browser process terminated');
     }
   }
 }

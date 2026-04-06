@@ -673,6 +673,14 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
 
     for (const line of lines) {
       if (line.trim() === '') continue;
+
+      // Detect CDP screencast frames — forward as a separate SSE event
+      if (line.startsWith('__SCREENCAST_FRAME__')) {
+        const frameData = line.slice('__SCREENCAST_FRAME__'.length);
+        broadcastSSE('screencast', { frame: frameData });
+        continue; // don't add to log buffer
+      }
+
       const logType = detectLogType(line);
       const logEntry = { line, type: logType, timestamp: Date.now() };
       runnerState.logBuffer.push(logEntry);
