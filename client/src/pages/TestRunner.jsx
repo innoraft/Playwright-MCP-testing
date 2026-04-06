@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import LiveMonitor from '../components/LiveMonitor';
 
 export default function TestRunner({ onNavigateToReport }) {
   const { authFetch, token } = useAuth();
@@ -9,6 +10,7 @@ export default function TestRunner({ onNavigateToReport }) {
   const [result, setResult] = useState(null);   // null | 'passed' | 'failed'
   const [logs, setLogs] = useState([]);
   const [toast, setToast] = useState(null);
+  const [screencastFrame, setScreencastFrame] = useState(null);
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -59,6 +61,15 @@ export default function TestRunner({ onNavigateToReport }) {
       } catch { /* ignore parse errors */ }
     });
 
+    es.addEventListener('screencast', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.frame) {
+          setScreencastFrame(data.frame);
+        }
+      } catch { /* ignore */ }
+    });
+
     es.addEventListener('done', (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -92,6 +103,7 @@ export default function TestRunner({ onNavigateToReport }) {
     setLogs([]);
     setResult(null);
     setStatus('running');
+    setScreencastFrame(null);
 
     try {
       const res = await authFetch('/api/runner/run', {
@@ -227,6 +239,9 @@ export default function TestRunner({ onNavigateToReport }) {
           </div>
         </div>
       </div>
+
+      {/* Live Browser Monitor */}
+      <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} />
 
       {/* Log Console */}
       <div className="log-console-container">
