@@ -153,7 +153,7 @@ class StatelessMCPRunner {
    * @param {number} action.duration - Execution time in milliseconds
    * @param {string|null} [action.screenshot] - Screenshot path if captured
    */
-  recordAction({ tool, params, status, assertion, error, duration, screenshot, diffScreenshot, visualResult }) {
+  recordAction({ tool, params, status, assertion, error, duration, screenshot, diffScreenshot, visualResult, testStep }) {
     this.testResults.actions.push({
       tool,
       params,
@@ -164,6 +164,7 @@ class StatelessMCPRunner {
       screenshot: screenshot || null,
       diffScreenshot: diffScreenshot || null,
       visualResult: visualResult || null,
+      testStep: testStep || null,
       timestamp: new Date()
     });
 
@@ -411,6 +412,7 @@ class StatelessMCPRunner {
         '--cdp-endpoint', `http://127.0.0.1:${this.cdpPort}`,
         '--ignore-https-errors',
         '--output-dir', 'screenshots',
+        '--output-mode', 'stdout',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
@@ -818,7 +820,8 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
             duration,
             screenshot: screenshotPath,
             diffScreenshot: result.diffPath || null,
-            visualResult: result
+            visualResult: result,
+            testStep: originalStep.trim()
           });
 
           if (result.passed) {
@@ -836,7 +839,8 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
             assertion: true,
             error: err.message,
             duration: Date.now() - start,
-            screenshot: screenshotPath
+            screenshot: screenshotPath,
+            testStep: originalStep.trim()
           });
           log.error('Visual regression error', err.message);
         }
@@ -855,7 +859,8 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
           status: 'passed',
           assertion: step.isAssertion || false,
           duration,
-          screenshot: screenshotPath
+          screenshot: screenshotPath,
+          testStep: originalStep.trim()
         });
 
 
@@ -870,7 +875,8 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
           status: 'failed',
           assertion: step.isAssertion || false,
           error: err.message,
-          duration: err.duration || 0
+          duration: err.duration || 0,
+          testStep: originalStep.trim()
         });
       }
     }

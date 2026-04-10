@@ -304,6 +304,89 @@ export class TestReportGenerator {
   }
 
   /**
+   * Converts raw MCP/Playwright error strings into clear, actionable messages.
+   * Returns a structured object with a friendly title, advice, and the raw error.
+   *
+   * @param {string} rawError - The raw error message string
+   * @returns {{ title: string, advice: string, raw: string }}
+   */
+  humanizeError(rawError) {
+    if (!rawError) return { title: '⚠️ Unknown Error', advice: 'No error details were captured.', raw: '' };
+
+    const raw = String(rawError);
+
+    const patterns = [
+      {
+        test: /TimeoutError.*Timeout\s+\d+ms\s+exceeded/i,
+        title: '⏱️ Element Not Found (Timeout)',
+        advice: 'The tool waited but couldn\'t find the element on the page. Your test step may reference an element that doesn\'t exist, has a different label, or hasn\'t loaded yet. Make sure you\'re using the <strong>exact text or placeholder</strong> visible on the page.'
+      },
+      {
+        test: /Target page,?\s*context\s+or\s+browser\s+has\s+been\s+closed/i,
+        title: '🌐 Browser Session Lost',
+        advice: 'The browser was closed or crashed before this step could run. This usually means a previous step caused a navigation error or the page became unresponsive. <strong>Check earlier steps for failures.</strong>'
+      },
+      {
+        test: /net::ERR_|navigation/i,
+        title: '🔗 Navigation Failed',
+        advice: 'The page could not be loaded. Check that the <strong>URL in your test step is correct</strong> and the site is accessible. Also ensure there are no typos in the domain name.'
+      },
+      {
+        test: /locator\.(click|fill|type|press)/i,
+        title: '🎯 Element Interaction Failed',
+        advice: 'Could not interact with the target element. It may be <strong>hidden, disabled, overlapped</strong> by another element, or the selector/placeholder text doesn\'t match what\'s actually on the page. Double-check the element\'s label or placeholder.'
+      },
+      {
+        test: /MCP Tool returned false/i,
+        title: '❌ Action Did Not Succeed',
+        advice: 'The tool executed but reported failure. The element might exist but the interaction didn\'t produce the expected result — e.g., a click didn\'t trigger navigation, or a form field rejected the input. <strong>Review your test step for accuracy.</strong>'
+      },
+      {
+        test: /Invalid plan JSON/i,
+        title: '🤖 AI Planning Error',
+        advice: 'The AI model produced an invalid execution plan. This can happen with complex or ambiguous test steps. Try <strong>simplifying your test steps</strong> — use shorter, clearer instructions with one action per step.'
+      },
+      {
+        test: /Chromium not found/i,
+        title: '🖥️ Browser Not Installed',
+        advice: 'Chromium browser is not installed on the server. Run <code>npx playwright install chromium</code> to fix this.'
+      },
+      {
+        test: /Chromium failed to start|CDP within/i,
+        title: '🖥️ Browser Failed to Start',
+        advice: 'The browser could not start within the time limit. This is usually a <strong>system resource issue</strong>. Try closing other applications or restarting the server.'
+      },
+      {
+        test: /baseline.*not found|No baseline|ENOENT.*baseline/i,
+        title: '📸 Visual Baseline Missing',
+        advice: 'No baseline reference image exists for this visual check. Run the test once with <strong>baseline capture enabled</strong> to create the reference image first.'
+      },
+      {
+        test: /strict mode violation|resolved to \d+ elements/i,
+        title: '🔍 Multiple Elements Matched',
+        advice: 'The selector matched more than one element on the page. Your test step description is <strong>too generic</strong>. Be more specific — e.g., instead of "click Submit", try "click the Submit button in the Contact form".'
+      },
+      {
+        test: /waiting for selector|waiting for locator/i,
+        title: '⏳ Element Not Found',
+        advice: 'The tool kept waiting for an element that never appeared. The element may load <strong>after a delay or behind an interaction</strong> (e.g., after clicking a tab). Ensure previous steps set up the right page state.'
+      },
+    ];
+
+    for (const pattern of patterns) {
+      if (pattern.test.test(raw)) {
+        return { title: pattern.title, advice: pattern.advice, raw };
+      }
+    }
+
+    return {
+      title: '⚠️ Unexpected Error',
+      advice: 'An unexpected error occurred during this step. See the raw error details below for debugging information.',
+      raw
+    };
+  }
+
+  /**
    * Generates the header section of the HTML report.
    * @param {Object} testReport - The test report data
    * 
@@ -451,19 +534,34 @@ export class TestReportGenerator {
 
             const isAssertion = /assert|expect|verify|check|validate/i.test(action.tool);
 
+            // Humanize error if present
+            const friendlyError = action.error ? this.humanizeError(action.error) : null;
+
+            // Escape raw error for safe HTML display inside <pre>
+            const escapeHtml = (str) => str
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;');
+
             return `
             <div class="action-item ${action.status}${isVR ? ' vr-action' : ''}${action.status === 'failed' ? ' expanded' : ''}"
                  data-status="${dataStatus}${isAssertion ? ' assertion' : ''}">
               <div class="action-header" onclick="toggleAction(${idx})">
                 <div class="action-title">
                   <div class="action-number">${idx + 1}</div>
-                  <div class="action-tool">
-                    ${isVR ? 'mcp_ ' : ''}${action.tool}
-                    ${isVR && action.visualResult?.breakpoint
-                      ? `<span style="font-size:11px;color:#6b7280;margin-left:6px;">
-                           @ ${action.visualResult.breakpoint}
-                         </span>`
+                  <div class="action-title-text">
+                    ${action.testStep
+                      ? `<div class="action-step-text">${action.testStep}</div>`
                       : ''}
+                    <div class="action-tool">
+                      ${isVR ? 'mcp_ ' : ''}${action.tool}
+                      ${isVR && action.visualResult?.breakpoint
+                        ? `<span style="font-size:11px;color:#6b7280;margin-left:6px;">
+                             @ ${action.visualResult.breakpoint}
+                           </span>`
+                        : ''}
+                    </div>
                   </div>
                 </div>
                 <div class="action-status">
@@ -480,9 +578,16 @@ export class TestReportGenerator {
               </div>
 
               <div class="action-details">
-                ${action.error ? `
+                ${friendlyError ? `
                   <div class="error-box">
-                    <strong>❌ Error:</strong> ${action.error}
+                    <div class="error-friendly">
+                      <div class="error-friendly-title">${friendlyError.title}</div>
+                      <p class="error-friendly-advice">${friendlyError.advice}</p>
+                    </div>
+                    <details class="error-raw-details">
+                      <summary>Show raw error</summary>
+                      <pre class="error-raw">${escapeHtml(friendlyError.raw)}</pre>
+                    </details>
                   </div>` : ''}
 
                 ${isVR
