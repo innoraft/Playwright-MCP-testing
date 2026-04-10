@@ -214,19 +214,7 @@ const quickRef = [
   { action: 'Keyboard', pattern: "Press the <Key> key while <element> is focused" },
 ];
 
-const checklist = [
-  { text: "Every URL starts with https://", cat: "nav" },
-  { text: "Element type specified (button, link, input, etc.)", cat: "elem" },
-  { text: "Unambiguous identifier (text, aria-label, placeholder, test-id)", cat: "elem" },
-  { text: "Container/scope added when multiple elements could match", cat: "elem" },
-  { text: "Label attribute type declared (label vs placeholder vs aria-label)", cat: "form" },
-  { text: "Each form field is its own step", cat: "form" },
-  { text: "Native <select> vs custom dropdown distinguished", cat: "form" },
-  { text: "Clear assertion verb used (verify, ensure, check, validate)", cat: "assert" },
-  { text: "Assertion has element + property + expected value", cat: "assert" },
-  { text: "Wait specifies duration or condition", cat: "nav" },
-  { text: "'Handle the browser dialog' used for native alerts", cat: "dialog" },
-];
+
 
 export default function BestPracticesPopup({ manualOpen = false, onClose }) {
   const isFirstVisit = !localStorage.getItem(STORAGE_KEY);
@@ -275,7 +263,6 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
               {[
                 { id: 'guide', label: 'Guide', icon: '📚' },
                 { id: 'patterns', label: 'Patterns', icon: '⚡' },
-                { id: 'checklist', label: 'Checklist', icon: '☑' },
               ].map(t => (
                 <button
                   key={t.id}
@@ -297,8 +284,7 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
         <div className="bp-banner">
           <span className="bp-banner-icon">💡</span>
           <span>
-            The LLM cannot see your page at planning time.
-            Every step must carry enough context to select the correct tool <strong>without guessing</strong>.
+            You don't need to follow the examples word-for-word — just make sure each step has <strong>enough detail</strong> for the LLM to identify the right element and action <strong>without guessing</strong>.
           </span>
         </div>
 
@@ -434,18 +420,6 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
           </div>
         )}
 
-        {/* ════ Tab: Checklist ════ */}
-        {activeTab === 'checklist' && (
-          <div className="bp-body-scroll">
-            <p className="bp-intro">Go through each item before submitting your test. Click to check off.</p>
-            <div className="bp-checklist">
-              {checklist.map((item, i) => (
-                <ChecklistItem key={i} text={item.text} />
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* ── Footer ── */}
         <div className="bp-footer">
           <span className="bp-footer-hint">Reopen anytime from the sidebar</span>
@@ -455,17 +429,5 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function ChecklistItem({ text }) {
-  const [checked, setChecked] = useState(false);
-  return (
-    <label className={`bp-check ${checked ? 'bp-check--done' : ''}`} onClick={() => setChecked(c => !c)}>
-      <span className="bp-check-box">
-        {checked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-      </span>
-      <span className="bp-check-text">{text}</span>
-    </label>
   );
 }
