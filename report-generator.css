@@ -165,9 +165,10 @@ body {
 
 .action-title {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 15px;
   flex: 1;
+  min-width: 0;
 }
 
 .action-number {
@@ -181,12 +182,14 @@ body {
   justify-content: center;
   font-weight: 600;
   font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .action-tool {
-  font-weight: 600;
-  font-size: 16px;
-  color: #1f2937;
+  font-size: 12px;
+  color: #6b7280;
+  font-family: 'Courier New', monospace;
 }
 
 .action-status {
@@ -271,10 +274,94 @@ body {
 .error-box {
   background: #fef2f2;
   border: 1px solid #fecaca;
-  padding: 15px;
-  border-radius: 6px;
+  padding: 16px;
+  border-radius: 8px;
   color: #991b1b;
   margin-bottom: 15px;
+}
+
+.error-friendly {
+  margin-bottom: 10px;
+}
+
+.error-friendly-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: #991b1b;
+}
+
+.error-friendly-advice {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #7f1d1d;
+  margin: 0;
+}
+
+.error-friendly-advice strong {
+  color: #991b1b;
+}
+
+.error-friendly-advice code {
+  background: #fee2e2;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+}
+
+.error-raw-details {
+  border-top: 1px solid #fecaca;
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.error-raw-details summary {
+  font-size: 12px;
+  color: #b91c1c;
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+}
+
+.error-raw-details summary:hover {
+  color: #991b1b;
+  text-decoration: underline;
+}
+
+.error-raw {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fde8e8;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #7f1d1d;
+  font-family: 'Courier New', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Test step text in action header */
+.action-title-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action-step-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 600px;
 }
 
 .screenshot-container {

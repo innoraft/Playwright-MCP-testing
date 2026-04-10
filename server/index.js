@@ -567,18 +567,45 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
 //  TEST RUNNER ENDPOINTS
 // ══════════════════════════════════════════════════════════
 
-// ── Runner state ───────────────────────────────────────────
-let runnerState = {
-  status: 'idle',        // 'idle' | 'running'
-  runId: null,           // unique run ID for tracking
-  testName: null,        // name of test being run
-  process: null,         // child process reference
-  logBuffer: [],         // buffered log lines
-  sseClients: [],        // connected SSE clients
-  result: null,          // 'passed' | 'failed' | null
-  reportFile: null,      // latest report filename
-  startedAt: null        // run start time
-};
+// ── Per-user runner state ───────────────────────────────────
+// Each user gets their own isolated runner state so multiple
+// users can run tests concurrently without blocking each other.
+const runnerStates = new Map(); // Map<userId, RunnerState>
+
+function createRunnerState() {
+  return {
+    status: 'idle',        // 'idle' | 'running'
+    runId: null,           // unique run ID for tracking
+    testName: null,        // name of test being run
+    userId: null,          // owner user ID
+    process: null,         // child process reference
+    logBuffer: [],         // buffered log lines
+    sseClients: [],        // connected SSE clients
+    result: null,          // 'passed' | 'failed' | null
+    reportFile: null,      // latest report filename
+    startedAt: null        // run start time
+  };
+}
+
+function getRunnerState(userId) {
+  if (!runnerStates.has(userId)) {
+    runnerStates.set(userId, createRunnerState());
+  }
+  return runnerStates.get(userId);
+}
+
+function resetRunnerState(userId) {
+  const state = getRunnerState(userId);
+  state.status = 'idle';
+  state.runId = null;
+  state.testName = null;
+  state.userId = null;
+  state.process = null;
+  state.logBuffer = [];
+  state.result = null;
+  state.reportFile = null;
+  state.startedAt = null;
+}
 
 // Run history — stores completed runs for lookup
 const runHistory = [];
@@ -586,18 +613,6 @@ const MAX_HISTORY = 50;
 
 function generateRunId() {
   return `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function resetRunnerState() {
-  runnerState.status = 'idle';
-  runnerState.runId = null;
-  runnerState.testName = null;
-  runnerState.userId = null;
-  runnerState.process = null;
-  runnerState.logBuffer = [];
-  runnerState.result = null;
-  runnerState.reportFile = null;
-  runnerState.startedAt = null;
 }
 
 // ── Log type detection ─────────────────────────────────────
@@ -609,10 +624,11 @@ function detectLogType(line) {
   return 'info';
 }
 
-// ── Broadcast to all SSE clients ───────────────────────────
-function broadcastSSE(event, data) {
+// ── Broadcast to a user's SSE clients ──────────────────────
+function broadcastSSE(userId, event, data) {
+  const state = getRunnerState(userId);
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  runnerState.sseClients = runnerState.sseClients.filter(res => {
+  state.sseClients = state.sseClients.filter(res => {
     try {
       res.write(msg);
       return true;
@@ -625,13 +641,16 @@ function broadcastSSE(event, data) {
 // ── POST /api/runner/run ───────────────────────────────────
 app.post('/api/runner/run', requireAuth, (req, res) => {
   const { testName } = req.body;
+  const userId = req.user.userId;
 
   if (!testName) {
     return res.status(400).json({ error: 'testName is required' });
   }
 
-  if (runnerState.status === 'running') {
-    return res.status(409).json({ error: 'A test is already running' });
+  const state = getRunnerState(userId);
+
+  if (state.status === 'running') {
+    return res.status(409).json({ error: 'You already have a test running' });
   }
 
   // Sanitize
@@ -645,15 +664,15 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   }
 
   // Reset state for new run
-  resetRunnerState();
-  runnerState.status = 'running';
-  runnerState.runId = generateRunId();
-  runnerState.testName = testName;
-  runnerState.userId = req.user.userId;
-  runnerState.startedAt = Date.now();
+  resetRunnerState(userId);
+  state.status = 'running';
+  state.runId = generateRunId();
+  state.testName = testName;
+  state.userId = userId;
+  state.startedAt = Date.now();
 
-  const currentRunId = runnerState.runId;
-  const currentUserId = req.user.userId;
+  const currentRunId = state.runId;
+  const currentUserId = userId;
 
   // Spawn the test runner as a child process
   const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
@@ -662,7 +681,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
-  runnerState.process = child;
+  state.process = child;
 
   // Handle stdout
   let stdoutBuffer = '';
@@ -677,14 +696,14 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       // Detect CDP screencast frames — forward as a separate SSE event
       if (line.startsWith('__SCREENCAST_FRAME__')) {
         const frameData = line.slice('__SCREENCAST_FRAME__'.length);
-        broadcastSSE('screencast', { frame: frameData });
+        broadcastSSE(currentUserId, 'screencast', { frame: frameData });
         continue; // don't add to log buffer
       }
 
       const logType = detectLogType(line);
       const logEntry = { line, type: logType, timestamp: Date.now() };
-      runnerState.logBuffer.push(logEntry);
-      broadcastSSE('log', logEntry);
+      state.logBuffer.push(logEntry);
+      broadcastSSE(currentUserId, 'log', logEntry);
     }
   });
 
@@ -698,8 +717,8 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     for (const line of lines) {
       if (line.trim() === '') continue;
       const logEntry = { line, type: 'fail', timestamp: Date.now() };
-      runnerState.logBuffer.push(logEntry);
-      broadcastSSE('log', logEntry);
+      state.logBuffer.push(logEntry);
+      broadcastSSE(currentUserId, 'log', logEntry);
     }
   });
 
@@ -709,18 +728,18 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     if (stdoutBuffer.trim()) {
       const logType = detectLogType(stdoutBuffer);
       const logEntry = { line: stdoutBuffer, type: logType, timestamp: Date.now() };
-      runnerState.logBuffer.push(logEntry);
-      broadcastSSE('log', logEntry);
+      state.logBuffer.push(logEntry);
+      broadcastSSE(currentUserId, 'log', logEntry);
     }
     if (stderrBuffer.trim()) {
       const logEntry = { line: stderrBuffer, type: 'fail', timestamp: Date.now() };
-      runnerState.logBuffer.push(logEntry);
-      broadcastSSE('log', logEntry);
+      state.logBuffer.push(logEntry);
+      broadcastSSE(currentUserId, 'log', logEntry);
     }
 
-    runnerState.status = 'idle';
-    runnerState.result = code === 0 ? 'passed' : 'failed';
-    runnerState.process = null;
+    state.status = 'idle';
+    state.result = code === 0 ? 'passed' : 'failed';
+    state.process = null;
 
     // Find the latest report file
     try {
@@ -731,7 +750,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
           .sort((a, b) => b.mtime - a.mtime);
 
         if (reports.length > 0) {
-          runnerState.reportFile = reports[0].name;
+          state.reportFile = reports[0].name;
         }
       }
     } catch (err) {
@@ -741,11 +760,11 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     // Attribute generated files to the user who triggered the run
     if (currentUserId) {
       // Attribute report
-      if (runnerState.reportFile) {
-        setOwner('reports', runnerState.reportFile, currentUserId);
+      if (state.reportFile) {
+        setOwner('reports', state.reportFile, currentUserId);
       }
       // Attribute any screenshots/diffs created during this run
-      const runStart = runnerState.startedAt || 0;
+      const runStart = state.startedAt || 0;
       for (const subdir of ['screenshots', 'diffs']) {
         const dirPath = path.join(FILES_DIR, subdir);
         if (fs.existsSync(dirPath)) {
@@ -766,35 +785,35 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     // Save to run history
     runHistory.unshift({
       runId: currentRunId,
-      testName: runnerState.testName,
+      testName: state.testName,
       userId: currentUserId,
-      result: runnerState.result,
-      reportFile: runnerState.reportFile,
-      startedAt: runnerState.startedAt,
+      result: state.result,
+      reportFile: state.reportFile,
+      startedAt: state.startedAt,
       finishedAt: Date.now(),
       exitCode: code,
-      logCount: runnerState.logBuffer.length
+      logCount: state.logBuffer.length
     });
     if (runHistory.length > MAX_HISTORY) runHistory.pop();
 
-    broadcastSSE('done', {
+    broadcastSSE(currentUserId, 'done', {
       runId: currentRunId,
-      result: runnerState.result,
-      reportFile: runnerState.reportFile,
+      result: state.result,
+      reportFile: state.reportFile,
       exitCode: code
     });
   });
 
   child.on('error', (err) => {
     console.error('Runner process error:', err);
-    runnerState.status = 'idle';
-    runnerState.result = 'failed';
-    runnerState.process = null;
+    state.status = 'idle';
+    state.result = 'failed';
+    state.process = null;
 
     const logEntry = { line: `Process error: ${err.message}`, type: 'fail', timestamp: Date.now() };
-    runnerState.logBuffer.push(logEntry);
-    broadcastSSE('log', logEntry);
-    broadcastSSE('done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
+    state.logBuffer.push(logEntry);
+    broadcastSSE(currentUserId, 'log', logEntry);
+    broadcastSSE(currentUserId, 'done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
   });
 
   res.json({ success: true, message: `Running test: ${testName}`, runId: currentRunId });
@@ -810,6 +829,9 @@ app.get('/api/runner/logs', (req, res, next) => {
   }
   requireAuth(req, res, next);
 }, (req, res) => {
+  const userId = req.user.userId;
+  const state = getRunnerState(userId);
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -818,36 +840,38 @@ app.get('/api/runner/logs', (req, res, next) => {
   });
 
   // Replay buffered logs
-  for (const logEntry of runnerState.logBuffer) {
+  for (const logEntry of state.logBuffer) {
     res.write(`event: log\ndata: ${JSON.stringify(logEntry)}\n\n`);
   }
 
   // If run already finished, send done immediately
-  if (runnerState.status === 'idle' && runnerState.result) {
+  if (state.status === 'idle' && state.result) {
     res.write(`event: done\ndata: ${JSON.stringify({
-      runId: runnerState.runId,
-      result: runnerState.result,
-      reportFile: runnerState.reportFile
+      runId: state.runId,
+      result: state.result,
+      reportFile: state.reportFile
     })}\n\n`);
   }
 
   // Register client for future events
-  runnerState.sseClients.push(res);
+  state.sseClients.push(res);
 
   // Cleanup on disconnect
   req.on('close', () => {
-    runnerState.sseClients = runnerState.sseClients.filter(c => c !== res);
+    state.sseClients = state.sseClients.filter(c => c !== res);
   });
 });
 
 // ── POST /api/runner/stop ──────────────────────────────────
 app.post('/api/runner/stop', requireAuth, (req, res) => {
-  if (runnerState.status !== 'running' || !runnerState.process) {
+  const state = getRunnerState(req.user.userId);
+
+  if (state.status !== 'running' || !state.process) {
     return res.status(400).json({ error: 'No test is currently running' });
   }
 
   try {
-    runnerState.process.kill('SIGTERM');
+    state.process.kill('SIGTERM');
     res.json({ success: true, message: 'Test run stopped' });
   } catch (err) {
     console.error('Failed to stop runner:', err);
@@ -857,14 +881,16 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
 
 // ── GET /api/runner/status ─────────────────────────────────
 app.get('/api/runner/status', requireAuth, (req, res) => {
+  const state = getRunnerState(req.user.userId);
+
   res.json({
-    status: runnerState.status,
-    runId: runnerState.runId,
-    testName: runnerState.testName,
-    result: runnerState.result,
-    reportFile: runnerState.reportFile,
-    logCount: runnerState.logBuffer.length,
-    startedAt: runnerState.startedAt
+    status: state.status,
+    runId: state.runId,
+    testName: state.testName,
+    result: state.result,
+    reportFile: state.reportFile,
+    logCount: state.logBuffer.length,
+    startedAt: state.startedAt
   });
 });
 

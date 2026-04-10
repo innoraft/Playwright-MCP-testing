@@ -9,12 +9,14 @@ import BaselineManager from './pages/BaselineManager';
 import FileBrowser from './pages/FileBrowser';
 import UserManagement from './pages/UserManagement';
 import ChangePassword from './pages/ChangePassword';
+import BestPracticesPopup from './components/BestPracticesPopup';
 import './index.css';
 
 function App() {
   const { user, isAdmin, isAuthenticated, loading, logout } = useAuth();
   const [activePage, setActivePage] = useState('test-suites');
   const [pendingReport, setPendingReport] = useState(null);
+  const [showBestPractices, setShowBestPractices] = useState(false);
 
   // Redirect to allowed page when role changes
   useEffect(() => {
@@ -129,6 +131,15 @@ function App() {
             <span className="sidebar-link-icon">📂</span>
             Files & Assets
           </button>
+
+          <div className="sidebar-section-label">Help</div>
+          <button
+            className="sidebar-link"
+            onClick={() => setShowBestPractices(true)}
+          >
+            <span className="sidebar-link-icon">📖</span>
+            Best Practices
+          </button>
         </nav>
 
         {/* User info + Logout */}
@@ -156,6 +167,9 @@ function App() {
           </div>
         </div>
       </aside>
+
+      {/* Best Practices Popup — first-visit auto-show + manual trigger */}
+      <BestPracticesPopup manualOpen={showBestPractices} onClose={() => setShowBestPractices(false)} />
 
       {/* Main Content */}
       <main className="main-content">
