@@ -15,14 +15,15 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { TestReportGenerator } from './test-report-generator.js';
 import fs from 'fs';
 import path from 'path';
-import net from 'net';
 import { fileURLToPath } from 'url';
-import { execSync, spawn as cpSpawn } from 'child_process';
+import { execSync } from 'child_process';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
 import llmConfig from './config/llm.config.js';
 import { VisualRegressionChecker } from './visual-regression.js';
-import WebSocket from 'ws';
+import { CDPService } from './src/cdp/cdp.service.js';
+import { buildSystemPrompt } from './src/prompts/initial.prompt.js';
+import { buildReplanPrompt } from './src/prompts/retry.prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,13 +74,15 @@ class StatelessMCPRunner {
     });
 
     this.visualChecker = new VisualRegressionChecker();
+    // Token accounting
+    this.tokenUsage = {
+      totalInputTokens:  0,
+      totalOutputTokens: 0,
+      callCount:         0,
+      perStep:           []
+    };
 
-    // CDP Screencast state
-    this.cdpPort = null;
-    this.browserProcess = null;
-    this.cdpSocket = null;
-    this.screencastActive = false;
-    this.chromiumPath = null;
+    this.cdpService = new CDPService(config.browser, log);
   }
 
   /**
@@ -138,6 +141,20 @@ class StatelessMCPRunner {
     } catch {
       // Ignore cleanup errors
     }
+
+    // Remove non-image files from screenshots dir
+    try {
+      const entries = fs.readdirSync(config.reporting.screenshotsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && !/\.(png|jpg|jpeg)$/i.test(entry.name)) {
+          const filePath = path.join(config.reporting.screenshotsDir, entry.name);
+          fs.unlinkSync(filePath);
+          log.info(`Removed non-image file from screenshots: ${entry.name}`);
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 
   /**
@@ -170,215 +187,6 @@ class StatelessMCPRunner {
 
     if (status === 'passed') this.testResults.passed++;
     if (status === 'failed') this.testResults.failed++;
-  }
-
-  /**
-   * Finds a free TCP port on localhost.
-   * @returns {Promise<number>} A free port number
-   */
-  findFreePort() {
-    return new Promise((resolve, reject) => {
-      const srv = net.createServer();
-      srv.listen(0, '127.0.0.1', () => {
-        const port = srv.address().port;
-        srv.close(() => resolve(port));
-      });
-      srv.on('error', reject);
-    });
-  }
-
-  /**
-   * Launches Chromium with --remote-debugging-port so we can
-   * attach CDP screencast AND let @playwright/mcp connect via --cdp-endpoint.
-   *
-   * @param {string} chromiumPath - Absolute path to Chromium binary
-   * @returns {Promise<number>} The allocated CDP port
-   */
-  async launchBrowserWithCDP(chromiumPath) {
-    const port = await this.findFreePort();
-    this.cdpPort = port;
-    this.chromiumPath = chromiumPath;
-
-    const args = [
-      `--remote-debugging-port=${port}`,
-      '--headless=new',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      // Anti-bot-detection flags
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-infobars',
-      `--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36`,
-      `--window-size=${config.browser.viewport.width},${config.browser.viewport.height}`,
-      'about:blank'
-    ];
-
-    log.info(`Launching Chromium with CDP on port ${port}`);
-    this.browserProcess = cpSpawn(chromiumPath, args, {
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-
-    // Wait for CDP to be ready by polling the /json/version endpoint
-    const startTime = Date.now();
-    const timeout = 15000;
-    while (Date.now() - startTime < timeout) {
-      try {
-        const resp = await fetch(`http://127.0.0.1:${port}/json/version`);
-        if (resp.ok) {
-          const info = await resp.json();
-          log.success(`Chromium CDP ready: ${info.Browser}`);
-
-          // Inject stealth scripts to evade bot detection on every new page
-          try {
-            const targetsResp = await fetch(`http://127.0.0.1:${port}/json`);
-            const targets = await targetsResp.json();
-            const pageTarget = targets.find(t => t.type === 'page');
-            if (pageTarget && pageTarget.webSocketDebuggerUrl) {
-              const ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
-              await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-
-              // Remove navigator.webdriver flag on every frame via CDP
-              ws.send(JSON.stringify({
-                id: 1,
-                method: 'Page.addScriptToEvaluateOnNewDocument',
-                params: {
-                  source: `
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                    window.chrome = { runtime: {} };
-                  `
-                }
-              }));
-
-              // Wait briefly for the command to be acknowledged, then close
-              await new Promise(r => setTimeout(r, 200));
-              ws.close();
-              log.success('Stealth scripts injected via CDP');
-            }
-          } catch (stealthErr) {
-            log.warn(`Stealth injection failed (non-fatal): ${stealthErr.message}`);
-          }
-
-          return port;
-        }
-      } catch { /* not ready yet */ }
-      await new Promise(r => setTimeout(r, 300));
-    }
-
-    throw new Error('Chromium failed to start with CDP within 15 seconds');
-  }
-
-  /**
-   * Connects to CDP and starts Page.startScreencast.
-   * Emits frames to stdout with __SCREENCAST_FRAME__ prefix for the server to pick up.
-   */
-  async startScreencast() {
-    if (!this.cdpPort) {
-      log.warn('No CDP port available, skipping screencast');
-      return;
-    }
-
-    try {
-      // Poll /json to find a page target
-      let pageWsUrl = null;
-      for (let attempt = 0; attempt < 30; attempt++) {
-        try {
-          const resp = await fetch(`http://127.0.0.1:${this.cdpPort}/json`);
-          const targets = await resp.json();
-          const page = targets.find(t => t.type === 'page');
-          if (page && page.webSocketDebuggerUrl) {
-            pageWsUrl = page.webSocketDebuggerUrl;
-            break;
-          }
-        } catch { /* retry */ }
-        await new Promise(r => setTimeout(r, 500));
-      }
-
-      if (!pageWsUrl) {
-        log.warn('No page target found for screencast');
-        return;
-      }
-
-      log.info(`Connecting CDP screencast to: ${pageWsUrl}`);
-      this.cdpSocket = new WebSocket(pageWsUrl);
-
-      await new Promise((resolve, reject) => {
-        this.cdpSocket.on('open', resolve);
-        this.cdpSocket.on('error', reject);
-        setTimeout(() => reject(new Error('CDP WebSocket timeout')), 5000);
-      });
-
-      let msgId = 1;
-
-      // Start screencast: JPEG, quality 40, capped at viewport size, every other frame
-      this.cdpSocket.send(JSON.stringify({
-        id: msgId++,
-        method: 'Page.startScreencast',
-        params: {
-          format: 'jpeg',
-          quality: 40,
-          maxWidth: config.browser.viewport.width,
-          maxHeight: config.browser.viewport.height,
-          everyNthFrame: 2
-        }
-      }));
-
-      this.screencastActive = true;
-
-      this.cdpSocket.on('message', (raw) => {
-        try {
-          const msg = JSON.parse(raw.toString());
-          if (msg.method === 'Page.screencastFrame') {
-            // Acknowledge the frame so CDP keeps sending
-            this.cdpSocket.send(JSON.stringify({
-              id: msgId++,
-              method: 'Page.screencastFrameAck',
-              params: { sessionId: msg.params.sessionId }
-            }));
-
-            // Emit frame data via stdout for the server to detect
-            process.stdout.write(`__SCREENCAST_FRAME__${msg.params.data}\n`);
-          }
-        } catch { /* ignore parse errors */ }
-      });
-
-      this.cdpSocket.on('close', () => {
-        this.screencastActive = false;
-        log.info('CDP screencast connection closed');
-      });
-
-      this.cdpSocket.on('error', (err) => {
-        log.warn(`CDP screencast error: ${err.message}`);
-        this.screencastActive = false;
-      });
-
-      log.success('CDP screencast started');
-    } catch (err) {
-      log.warn(`Failed to start screencast: ${err.message}`);
-    }
-  }
-
-  /**
-   * Stops the CDP screencast and closes the WebSocket.
-   */
-  async stopScreencast() {
-    if (this.cdpSocket && this.screencastActive) {
-      try {
-        this.cdpSocket.send(JSON.stringify({
-          id: 9999,
-          method: 'Page.stopScreencast'
-        }));
-      } catch { /* ignore */ }
-    }
-    if (this.cdpSocket) {
-      try { this.cdpSocket.close(); } catch { /* ignore */ }
-      this.cdpSocket = null;
-    }
-    this.screencastActive = false;
   }
 
   /**
@@ -440,14 +248,14 @@ class StatelessMCPRunner {
     log.info(`Using Chromium at: ${chromiumPath}`);
 
     // Launch Chromium with CDP and connect MCP to it
-    await this.launchBrowserWithCDP(chromiumPath);
+    const cdpPort = await this.cdpService.initialize(chromiumPath);
 
     const transport = new StdioClientTransport({
       command: 'npx',
       cwd: workspaceDir,
       args: [
         '@playwright/mcp@latest',
-        '--cdp-endpoint', `http://127.0.0.1:${this.cdpPort}`,
+        '--cdp-endpoint', `http://127.0.0.1:${cdpPort}`,
         '--ignore-https-errors',
         '--output-dir', 'screenshots',
         '--output-mode', 'stdout',
@@ -480,9 +288,27 @@ class StatelessMCPRunner {
     }
 
     // Start CDP screencast for live monitoring
-    await this.startScreencast();
+    await this.cdpService.startScreencast();
 
     return this.mcpTools;
+  }
+
+  /**
+   * Takes a DOM accessibility snapshot via MCP browser_snapshot.
+   * Returns the text content the LLM can use for ref-based planning.
+   */
+  async takeDOMSnapshot() {
+    try {
+      const { result } = await this.executeMCP('browser_snapshot', {});
+      if (!result || !Array.isArray(result.content)) return '';
+      return result.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('\n');
+    } catch (err) {
+      log.warn(`DOM snapshot failed (non-fatal): ${err.message}`);
+      return '';
+    }
   }
 
   /**
@@ -579,18 +405,21 @@ class StatelessMCPRunner {
 
     const { text, toolCalls, usage } = await generateText(requestConfig);
 
-    // ---- TOKEN LOGGING (PER FILE) ----
+    // ── Token tracking ─────────────────────────────────────────────
     if (usage) {
-      console.log('🔍 Full Usage Object:', JSON.stringify(usage, null, 2));
-      log.info('📊 LLM Token Usage', {
-        prompt: usage.promptTokens,
-        completion: usage.completionTokens,
-        total: usage.totalTokens
-      });
+      const input  = usage.inputTokens  || usage.promptTokens     || 0;
+      const output = usage.outputTokens || usage.completionTokens || 0;
+      const total  = usage.totalTokens  || (input + output);
+
+      this.tokenUsage.totalInputTokens  += input;
+      this.tokenUsage.totalOutputTokens += output;
+      this.tokenUsage.callCount++;
+      this.tokenUsage.perStep.push({ label: `call-${this.tokenUsage.callCount}`, input, output, total });
+
+      log.info(`📊 LLM Tokens — in: ${input}, out: ${output}, total: ${total} (call #${this.tokenUsage.callCount})`);
     }
 
-    // Attach usage so caller (runner/report) can access it
-    const response = {
+    return {
       content: text,
       tool_calls: toolCalls?.map(tc => ({
         id: tc.toolCallId,
@@ -602,138 +431,31 @@ class StatelessMCPRunner {
       })),
       _usage: usage || null
     };
-
-    return response;
   }
 
-  /** 
-   * The prompt is used exclusively during the planning phase and does NOT
-   * execute any tools or call the MCP layer.
-   *
-   * @param {string} testText
-   *   Full raw test definition containing all human-readable test steps.
-   *
-   * @param {number} stepCount
-   *   Total number of test steps to be analyzed and planned.
-   *
-   * @returns {string}
-   *   A fully constructed system prompt instructing the LLM to generate
-   *   a strict, ordered execution plan as valid JSON.
-   */
-  buildSystemPrompt(testText, stepCount) {
-    // Dynamically inject tool definitions
-    const toolsInfo = Array.from(this.mcpTools.values()).map(tool => ({
-      name: tool.name, // Ensure this is the exact string needed to call the tool
-      description: tool.description,
-      schema: tool.inputSchema
-    }));
+  /** Prints a token usage summary after all steps have executed. */
+  printTokenSummary() {
+    const model   = config.llm.model;
+    const totalIn  = this.tokenUsage.totalInputTokens;
+    const totalOut = this.tokenUsage.totalOutputTokens;
+    const calls    = this.tokenUsage.callCount;
 
-    toolsInfo.push({
-      name: 'visual_regression_check',
-      description: 'Compares the current page screenshot at a specific viewport breakpoint against a stored baseline reference image using pixel-level diffing to detect visual regressions.',
-      schema: {
-        type: 'object',
-        properties: {
-          breakpoint: {
-            type: 'string',
-            description: 'Viewport width being tested e.g. "1280px", "768px", "375px"'
-          },
-          screenshotPath: {
-            type: 'string',
-            description: 'Path to the already-taken screenshot from the project root e.g. "files/screenshots/home-1280.png". MUST start with "files/screenshots/".'
-          }
-        },
-        required: ['breakpoint', 'screenshotPath']
-      }
+    const bar = '─'.repeat(54);
+    console.log(`\n┌${bar}┐`);
+    console.log(`│  📊 TOKEN USAGE SUMMARY`.padEnd(55) + '│');
+    console.log(`├${bar}┤`);
+    console.log(`│  Model          : ${model}`.padEnd(55) + '│');
+    console.log(`│  LLM Calls      : ${calls}`.padEnd(55) + '│');
+    console.log(`│  Input  tokens  : ${totalIn.toLocaleString()}`.padEnd(55) + '│');
+    console.log(`│  Output tokens  : ${totalOut.toLocaleString()}`.padEnd(55) + '│');
+    console.log(`│  Total  tokens  : ${(totalIn + totalOut).toLocaleString()}`.padEnd(55) + '│');
+    console.log(`└${bar}┘\n`);
+
+    console.log('  Per-call token breakdown:');
+    this.tokenUsage.perStep.forEach(s => {
+      console.log(`    ${s.label.padEnd(14)}: in=${s.input}, out=${s.output}, total=${s.total}`);
     });
-
-    return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
-    Do not try to improve the test steps, don't try to imporve the test. Don't skip any step, Don't repeat any step, Dont change the sequence of the steps.
-    You have to follow all the rules below strictly.
-
-## INPUT CONTEXT
-1. **AVAILABLE TOOLS:**
-${JSON.stringify(toolsInfo, null, 2)}
-
-2. **TEST STEPS:**
-${testText}
-
-## PLANNING LOGIC & RULES
-
-### 1. Tool Selection Strategy
-- **Please read the step thoroughly and extract the context of the step.
-- **Analyze the Intent:** For each test step, identify the core verb (action) and the target (noun/data).
-- **Semantic Matching:** Compare the step's intent against the **description** field of every available tool.
-- **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
-- **Dont send invalid json.
-- **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
-IMPORTANT: For steps that involve alerts, confirms, or prompts, you MUST use the "browser_handle_dialog" tool. 
-Do NOT use "browser_run_code" for modal dialogs.
-
-### 2. Parameter Generation (Schema Compliance)
-- **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
-- **Data Extraction:** Extract values (selectors, text, numbers, logic) directly from the test step to populate the schema fields.
-- **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
-- **Ids, classes are not refs keep in mind that. If you select any tool which requires ref then you have to extract proper ref from the sanpshot, otherwise
-it will throw illegitimate erros.
-- **If you are a old model and facing problem to extracts refs then use those tools which not demands ref as parameter.
-
-### 3. Step Classification
-- **Action:** If the step implies interaction (e.g., click, type, navigate, wait, scroll etc.), classify as \`isAssertion: false\`.
-- **Assertion:** If the step implies verification (e.g., verify, check, ensure, validate, confirm etc.), classify as \`isAssertion: true\`.
-
-### 4. Code Generation (If Applicable)
-- If a tool requires a code/script parameter (based on its schema):
-  - Generate self-contained, synchronous code.
-  - The code must implement the logic described in the test step.
-  - Do not assume the existence of external variables.
-  - The code must be a pure function body passed to Playwright.
-  - NEVER invoke the function (no trailing () ).
-  - NEVER return an executed expression.
-  - The value sent to MCP must be a function reference, not its result.
-  - Valid: "() => { return true; }"
-  - Invalid: "(() => { return true; })()"
-  - Do NOT wrap functions in quotes that execute immediately.
-  - The MCP tool will execute the function, you must only define it.
-
-### 5. Generated code re-check
-- Re check all the codes you generated with the valid standard for the dedicated mcp tools.
-- Mistakes will cause critical errors as there is no second chance, so re check the codes you have generated.
-- If you think any mistake is there you can rewrite the codes.
-- When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
-  (relative to the working directory), never to the root directory.
-  Example: await page.screenshot({ path: './screenshots/step-${Date.now()}.png' })
-- When calling visual_regression_check, always use the full path from the project root: 'files/screenshots/<filename>.png'
-  Example: screenshotPath: 'files/screenshots/home_1280px.png'
-
-### 6. MANDATORY TOOL ROUTING (Override all other rules)
-These rules are ABSOLUTE and cannot be overridden by semantic matching:
-
-| Step Intent | Correct Tool | FORBIDDEN Tool |
-|-------------|-------------|----------------|
-| "verify", "check", "ensure", "validate", "confirm", "assert" → text/element EXISTS on page | browser_run_code | browser_wait_for |
-| "wait for page to load", "wait for X seconds" | browser_wait_for | browser_snapshot |
-| "verify text is visible" | browser_run_code with page.locator().isVisible() | browser_wait_for |
-
-CRITICAL: browser_wait_for is ONLY for pausing execution (time-based or pre-condition waits).
-It is NEVER to be used for assertions or verifications.
-If a step contains the words: verify, check, ensure, validate, confirm, assert — you MUST use browser_run_code or browser_snapshot. Never browser_wait_for.
-
-## OUTPUT FORMAT
-Return a **SINGLE VALID JSON ARRAY**. Do not include markdown formatting, code blocks, or explanatory text outside the array.
-
-Target JSON Structure:
-[
-  {
-    "stepIndex": <number>,
-    "tool": "<EXACT_TOOL_NAME_FROM_LIST>",
-    "params": <OBJECT_MATCHING_TOOL_SCHEMA>,
-    "isAssertion": <boolean>,
-    "description": "<BRIEF_RATIONALE>"
-  }
-]
-
-Analyze the ${stepCount} steps and generate the execution plan now.`;
+    console.log('');
   }
 
   /**
@@ -744,12 +466,12 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @returns {Promise<Array<Object>>} Execution plan
    * @throws {Error} If plan JSON is invalid
    */
-  async generateExecutionPlan(testText, testSteps) {
+  async generateExecutionPlan(testText, testSteps, domSnapshot, isVisualRegression = false) {
     log.llm(`Chosen LLM provider -> ${config.llm.provider}`);
     log.llm(`Chosen Model -> ${config.llm.model} `)
     log.llm('Generating execution plan...');
 
-    const planningPrompt = this.buildSystemPrompt(testText, testSteps.length);
+    const planningPrompt = buildSystemPrompt(testText, testSteps.length, domSnapshot, this.mcpTools, isVisualRegression);
 
     const response = await this.callLLM([
       { role: 'system', content: planningPrompt },
@@ -765,16 +487,34 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
     console.log("plan ==>" + planJson)
     try {
       const plan = JSON.parse(planJson);
-        // Validate and clamp stepIndex values
-     plan.forEach((step, i) => {
+
+      // Validate and clamp stepIndex values
+      plan.forEach((step, i) => {
         if (step.stepIndex < 1 || step.stepIndex > testSteps.length) {
           log.warn(`Step ${i+1} has invalid stepIndex ${step.stepIndex}, correcting to ${i+1}`);
           step.stepIndex = i + 1; // fallback to sequential
         }
       });
 
-      log.success(`Generated plan with ${plan.length} steps`);
-      return plan;
+      // Sort by stepIndex to guarantee sequential execution
+      plan.sort((a, b) => a.stepIndex - b.stepIndex);
+
+      // Deduplicate: keep only the first plan entry per stepIndex
+      const seenIndices = new Set();
+      const dedupedPlan = plan.filter(step => {
+        if (seenIndices.has(step.stepIndex)) return false;
+        seenIndices.add(step.stepIndex);
+        return true;
+      });
+
+      // Trim to exactly testSteps.length entries — one per test step
+      if (dedupedPlan.length > testSteps.length) {
+        log.warn(`Plan has ${dedupedPlan.length} entries for ${testSteps.length} test steps — trimming to match.`);
+        dedupedPlan.splice(testSteps.length);
+      }
+
+      log.success(`Generated plan with ${dedupedPlan.length} steps (sorted, deduped)`);
+      return dedupedPlan;
     } catch (err) {
       log.error('Failed to parse execution plan', err.message);
       throw new Error(`Invalid plan JSON: ${err.message}`);
@@ -789,146 +529,285 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @returns {Promise<Object>} Final test results
    * @throws {Error} If test fails
    */
+  // Tools that cause a page navigation (DOM becomes stale after these)
+  static NAVIGATION_TOOLS = new Set([
+    'browser_navigate', 'browser_navigate_back'
+  ]);
+
+  /**
+   * Executes a single planned step (VR or MCP tool).
+   * Returns { passed: boolean, needsResnapshot: boolean }.
+   */
+  executeVisualRegressionStep(step, originalStep, testName) {
+    let { breakpoint, screenshotPath } = step.params;
+    const start = Date.now();
+
+    if (screenshotPath && !screenshotPath.startsWith('files/') && !screenshotPath.startsWith('./files/')) {
+      screenshotPath = path.join(config.reporting.screenshotsDir, path.basename(screenshotPath));
+    }
+
+    try {
+      const vrTestName = this.logicalTestName || testName;
+      const result = this.visualChecker.runRegressionStep(vrTestName, breakpoint, screenshotPath);
+
+      this.recordAction({
+        tool: 'visual_regression_check', params: step.params,
+        status: result.passed ? 'passed' : 'failed', assertion: true,
+        error: result.passed ? null : result.summary,
+        duration: Date.now() - start, screenshot: screenshotPath,
+        diffScreenshot: result.diffPath || null, visualResult: result,
+        testStep: originalStep.trim()
+      });
+
+      if (result.passed) {
+        log.success(`Visual regression passed at ${breakpoint} — ${result.mismatchPercent}% mismatch`);
+      } else {
+        log.error(`Visual regression FAILED at ${breakpoint}`, result.summary);
+      }
+      return { passed: result.passed, needsResnapshot: false };
+    } catch (err) {
+      this.recordAction({
+        tool: 'visual_regression_check', params: step.params,
+        status: 'failed', assertion: true, error: err.message,
+        duration: Date.now() - start, screenshot: screenshotPath,
+        testStep: originalStep.trim()
+      });
+      log.error('Visual regression error', err.message);
+      return { passed: false, needsResnapshot: false };
+    }
+  }
+
   async runTest(testText, testName) {
-    // Extract the logical test name from YAML 'name:' field if present,
-    // so that baseline filenames stay consistent across naming conventions.
     const yamlNameMatch = testText.match(/^name:\s*(.+)$/m);
     const logicalName = yamlNameMatch ? yamlNameMatch[1].trim() : testName;
     this.logicalTestName = logicalName;
+    const isVisualRegression = !!yamlNameMatch;
 
     log.info(`🧪 Starting test: ${testName} (logical name: ${logicalName})`);
 
     this.testReport = {
-      testName: logicalName,
-      testText,
-      startTime: new Date(),
-      endTime: null,
-      actions: [],
-      passedActions: 0,
-      failedActions: 0,
-      totalActions: 0,
-      testResult: 'running'
+      testName: logicalName, testText,
+      startTime: new Date(), endTime: null,
+      actions: [], passedActions: 0, failedActions: 0,
+      totalActions: 0, testResult: 'running'
     };
 
-    const testSteps = testText
-      .split('\n')
-      .filter(l => l.trim().startsWith('-'));
+    const testSteps = testText.split('\n').filter(l => l.trim().startsWith('-'));
 
-    // Generate complete plan
-    const executionPlan = await this.generateExecutionPlan(testText, testSteps);
+    // ── Phase 0: Extract URL and navigate first ───────────────────────
+    const urlMatch = testText.match(/https?:\/\/[^\s"'<>]+/i);
+    if (urlMatch) {
+      const targetUrl = urlMatch[0];
+      // Find the raw test step that contains this URL for reporting
+      const navStepText = testSteps.find(s => s.includes(targetUrl));
+      log.info(`🌐 Navigating to ${targetUrl} before taking snapshot...`);
+      try {
+        const { result, duration } = await this.executeMCP('browser_navigate', { url: targetUrl });
+        log.success(`Navigation to ${targetUrl} complete`);
+        this.recordAction({
+          tool: 'mcp_browser_navigate', params: { url: targetUrl },
+          status: 'passed', assertion: false,
+          duration, testStep: (navStepText || `- Navigate to ${targetUrl}`).trim()
+        });
+      } catch (navErr) {
+        log.warn(`Initial navigation failed (non-fatal): ${navErr.message}`);
+        this.recordAction({
+          tool: 'mcp_browser_navigate', params: { url: targetUrl },
+          status: 'failed', assertion: false,
+          error: navErr.message, duration: navErr.duration || 0,
+          testStep: (navStepText || `- Navigate to ${targetUrl}`).trim()
+        });
+      }
+    }
 
-    // Execute plan sequentially without additional LLM calls
-    for (let i = 0; i < executionPlan.length; i++) {
-      const step = executionPlan[i];
-      const originalStep = step.description || testSteps[step.stepIndex - 1] || testSteps[i];
+    // ── Phase 1: Snapshot AFTER navigation ─────────────────────────────
+    let initialSnapshot = '';
+    if (!isVisualRegression) {
+      log.info('📸 Taking DOM snapshot of loaded page for planning...');
+      initialSnapshot = await this.takeDOMSnapshot();
+    } else {
+      log.info('📸 Skipping DOM snapshot for visual regression test...');
+    }
 
-      log.info(`\n📍 Step ${i + 1}/${executionPlan.length}: ${originalStep.trim()}`);
+    // ── Phase 2: Single LLM plan with snapshot ────────────────────────
+    let executionPlan = await this.generateExecutionPlan(testText, testSteps, initialSnapshot, isVisualRegression);
+
+    // Remove duplicate navigation step — Phase 0 already navigated to the URL
+    if (urlMatch) {
+      const navigatedUrl = urlMatch[0];
+      executionPlan = executionPlan.filter(step => {
+        const tool = step.tool.replace(/^mcp_/, '');
+        if (tool === 'browser_navigate' && step.params?.url === navigatedUrl) {
+          log.info(`Skipping duplicate browser_navigate to ${navigatedUrl} (already done in Phase 0)`);
+          return false;
+        }
+        return true;
+      });
+    }
+
+    // Phase 3: Execute locally, re-plan on failure/navigation
+    let planIndex = 0;
+    // Track which original test steps have been attempted (1-based)
+    const attemptedSteps = new Set();
+    // Allow at most 1 re-plan per step to avoid infinite loops
+    const replanCount = { total: 0 };
+    const MAX_REPLANS = 3;
+
+    while (planIndex < executionPlan.length) {
+      const step = executionPlan[planIndex];
+      const rawStep = testSteps[step.stepIndex - 1] || testSteps[planIndex] || '';
+      const originalStep = rawStep || step.description || '';
+      const stepNum = step.stepIndex || (planIndex + 1);
+
+      log.info(`\n📍 Step ${stepNum}/${testSteps.length}: ${originalStep.trim()}`);
 
       const toolName = step.tool.replace(/^mcp_/, '');
 
+      // Visual regression (local, no re-plan needed)
       if (toolName === 'visual_regression_check') {
-        let { breakpoint, screenshotPath } = step.params;
-        const start = Date.now();
-
-        // Normalize screenshotPath: LLM may produce './screenshots/x.png' or 'screenshots/x.png'
-        // but the actual file lives under 'files/screenshots/x.png' from project root.
-        if (screenshotPath && !screenshotPath.startsWith('files/') && !screenshotPath.startsWith('./files/')) {
-          const basename = path.basename(screenshotPath);
-          screenshotPath = path.join(config.reporting.screenshotsDir, basename);
-          log.info(`Normalized screenshot path to: ${screenshotPath}`);
-        }
-
-        try {
-          // Use the logical YAML name (not the filename) so baseline paths match
-          const vrTestName = this.logicalTestName || testName;
-          const result = this.visualChecker.runRegressionStep(
-            vrTestName,
-            breakpoint,
-            screenshotPath
-          );
-
-          const duration = Date.now() - start;
-
-          this.recordAction({
-            tool: 'visual_regression_check',
-            params: step.params,
-            status: result.passed ? 'passed' : 'failed',
-            assertion: true,
-            error: result.passed ? null : result.summary,
-            duration,
-            screenshot: screenshotPath,
-            diffScreenshot: result.diffPath || null,
-            visualResult: result,
-            testStep: originalStep.trim()
-          });
-
-          if (result.passed) {
-            log.success(`Visual regression passed at ${breakpoint} — ${result.mismatchPercent}% mismatch`);
-          } else {
-            log.error(`Visual regression FAILED at ${breakpoint}`, result.summary);
-            log.info(`Diff saved at: ${result.diffPath}`);
-          }
-
-        } catch (err) {
-          this.recordAction({
-            tool: 'visual_regression_check',
-            params: step.params,
-            status: 'failed',
-            assertion: true,
-            error: err.message,
-            duration: Date.now() - start,
-            screenshot: screenshotPath,
-            testStep: originalStep.trim()
-          });
-          log.error('Visual regression error', err.message);
-        }
-
-        continue; // Skip executeMCP for this custom-tool
+        this.executeVisualRegressionStep(step, originalStep, testName);
+        planIndex++;
+        continue;
       }
+
+      // Execute MCP tool
+      let stepPassed = false;
+      let needsResnapshot = false;
 
       try {
         const { result, duration } = await this.executeMCP(toolName, step.params);
         const screenshotPath = this.extractScreenshotPath(result);
 
+        // If this step was previously recorded as failed (retried via re-plan),
+        // remove the old failed entry so only the final outcome remains.
+        const prevFailIdx = this.testResults.actions.findIndex(
+          a => a.testStep === originalStep.trim() && a.status === 'failed'
+        );
+        if (prevFailIdx !== -1) {
+          this.testResults.actions.splice(prevFailIdx, 1);
+          this.testResults.failed--;
+        }
 
         this.recordAction({
-          tool: `mcp_${step.tool}`,
-          params: step.params,
-          status: 'passed',
-          assertion: step.isAssertion || false,
-          duration,
-          screenshot: screenshotPath,
+          tool: `mcp_${step.tool}`, params: step.params,
+          status: 'passed', assertion: step.isAssertion || false,
+          duration, screenshot: screenshotPath,
           testStep: originalStep.trim()
         });
 
-
-        log.success(`✓ Step ${i + 1} passed${step.isAssertion ? ' (assertion)' : ''}`);
-
+        log.success(`✓ Step ${stepNum} passed${step.isAssertion ? ' (assertion)' : ''}`);
+        stepPassed = true;
+        // needsResnapshot stays false on success — re-plan only when a step fails.
+        // Triggering re-plan after every navigation caused the LLM to regenerate
+        // the remaining plan with wrong tools and duplicate/reordered steps.
       } catch (err) {
-        log.error(`✗ Step ${i + 1} failed`, err.message);
+        log.error(`✗ Step ${stepNum} failed`, err.message);
 
         this.recordAction({
-          tool: `mcp_${step.tool}`,
-          params: step.params,
-          status: 'failed',
-          assertion: step.isAssertion || false,
-          error: err.message,
-          duration: err.duration || 0,
+          tool: `mcp_${step.tool}`, params: step.params,
+          status: 'failed', assertion: step.isAssertion || false,
+          error: err.message, duration: err.duration || 0,
           testStep: originalStep.trim()
         });
+
+        needsResnapshot = !isVisualRegression; // Failed → likely stale refs (skip if VR)
       }
+
+      // ── Phase 4 & 5: Re-snapshot + re-plan on failure or navigation ──
+      if (needsResnapshot && replanCount.total < MAX_REPLANS) {
+        // If step failed, include it in remaining steps for re-plan
+        const startIdx = stepPassed ? planIndex + 1 : planIndex;
+        const remainingPlan = executionPlan.slice(startIdx);
+        if (remainingPlan.length === 0) {
+          planIndex++;
+          continue;
+        }
+
+        log.info('📸 Page changed — taking fresh snapshot for re-planning...');
+        const freshSnapshot = await this.takeDOMSnapshot();
+
+        // Collect the ORIGINAL stepIndex values so we can remap after re-plan
+        const remainingOriginalIndices = remainingPlan.map(s => s.stepIndex);
+        // Annotate each step with its stepIndex so the LLM preserves the order
+        const remainingStepsText = remainingPlan
+          .map(s => {
+            const text = testSteps[s.stepIndex - 1];
+            return text ? `(stepIndex ${s.stepIndex}) ${text}` : '';
+          })
+          .filter(Boolean)
+          .join('\n');
+
+        if (remainingStepsText.trim()) {
+          log.llm(`Re-planning ${remainingPlan.length} remaining steps with fresh snapshot...`);
+          replanCount.total++;
+
+          const replanPrompt = buildReplanPrompt(
+            remainingStepsText, freshSnapshot,
+            stepPassed ? null : originalStep.trim(),
+            stepPassed ? null : this.testResults.actions[this.testResults.actions.length - 1]?.error,
+            this.mcpTools,
+            remainingPlan.length
+          );
+
+          try {
+            const response = await this.callLLM([
+              { role: 'system', content: replanPrompt },
+              { role: 'user', content: 'Re-plan the remaining steps as JSON array.' }
+            ]);
+
+            let planJson = response.content
+              .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const newPlan = JSON.parse(planJson);
+
+            // Trim to at most the expected remaining count to prevent LLM over-generation
+            if (newPlan.length > remainingOriginalIndices.length) {
+              newPlan.splice(remainingOriginalIndices.length);
+            }
+
+            // Remap stepIndex to original test step indices so that
+            // rawStep lookup and deduplication work correctly.
+            newPlan.forEach((s, i) => {
+              if (i < remainingOriginalIndices.length) {
+                s.stepIndex = remainingOriginalIndices[i];
+              }
+            });
+
+            log.success(`Re-plan generated: ${newPlan.length} steps (remapped to original indices)`);
+
+            // Replace remaining portion of execution plan
+            const completedPlan = executionPlan.slice(0, startIdx);
+            executionPlan = [...completedPlan, ...newPlan];
+            // Resume from the first re-planned step
+            planIndex = completedPlan.length;
+            continue;
+          } catch (replanErr) {
+            log.warn(`Re-plan failed: ${replanErr.message}. Continuing with original plan.`);
+          }
+        }
+      }
+
+      planIndex++;
     }
 
+    // ── Finalize report ───────────────────────────────────────────────
     this.testReport.endTime = new Date();
     this.testReport.actions = this.testResults.actions;
     this.testReport.passedActions = this.testResults.passed;
     this.testReport.failedActions = this.testResults.failed;
     this.testReport.totalActions = this.testResults.actions.length;
-    this.testReport.testResult =
-      this.testResults.failed === 0 ? 'pass' : 'fail';
+    this.testReport.testResult = this.testResults.failed === 0 ? 'pass' : 'fail';
+    this.testReport.tokenUsage = {
+      model:        config.llm.model,
+      inputTokens:  this.tokenUsage.totalInputTokens,
+      outputTokens: this.tokenUsage.totalOutputTokens,
+      callCount:    this.tokenUsage.callCount
+    };
 
     const report = this.reportGenerator.generateReport(this.testReport);
     log.success(`📊 HTML Report: ${report.htmlReport}`);
+
+    // Print token cost summary
+    this.printTokenSummary();
 
     if (this.testResults.failed > 0) {
       throw new Error('Test failed');
@@ -943,27 +822,12 @@ Analyze the ${stepCount} steps and generate the execution plan now.`;
    * @returns {Promise<void>}
    */
   async cleanup() {
-    // Stop screencast first
-    await this.stopScreencast();
-
     if (this.mcpClient) {
       await this.mcpClient.close();
       log.info('MCP connection closed');
     }
 
-    // Kill the browser process we launched
-    if (this.browserProcess) {
-      try {
-        this.browserProcess.kill('SIGTERM');
-        // Give it a moment to exit gracefully, then force kill
-        await new Promise(r => setTimeout(r, 2000));
-        if (!this.browserProcess.killed) {
-          this.browserProcess.kill('SIGKILL');
-        }
-      } catch { /* ignore */ }
-      this.browserProcess = null;
-      log.info('Browser process terminated');
-    }
+    await this.cdpService.shutdown();
   }
 }
 
@@ -1040,6 +904,13 @@ async function main() {
   let totalPassed = 0;
   let totalFailed = 0;
 
+  // Aggregate token usage across all test files
+  const suiteTokens = {
+    totalInputTokens:  0,
+    totalOutputTokens: 0,
+    callCount:         0
+  };
+
   for (let i = 0; i < testFiles.length; i++) {
     const testFile = testFiles[i];
     const testName = path.basename(testFile);
@@ -1078,6 +949,11 @@ async function main() {
       log.error(`❌ Test FAILED: ${testName}`, err.message + '\n');
 
     } finally {
+      // Accumulate suite-wide token stats
+      suiteTokens.totalInputTokens  += runner.tokenUsage.totalInputTokens;
+      suiteTokens.totalOutputTokens += runner.tokenUsage.totalOutputTokens;
+      suiteTokens.callCount         += runner.tokenUsage.callCount;
+
       runner.cleanupStrayFiles();
       await runner.cleanup();
     }
@@ -1102,6 +978,19 @@ async function main() {
       console.log(`   Error: ${result.error}`);
     }
   });
+
+  // Suite-wide token usage
+  if (testFiles.length > 1) {
+    const bar = '─'.repeat(54);
+    console.log(`\n┌${bar}┐`);
+    console.log(`│  🗂️  SUITE-WIDE TOKEN USAGE`.padEnd(55) + '│');
+    console.log(`├${bar}┤`);
+    console.log(`│  Total LLM calls   : ${suiteTokens.callCount}`.padEnd(55) + '│');
+    console.log(`│  Total input tokens: ${suiteTokens.totalInputTokens.toLocaleString()}`.padEnd(55) + '│');
+    console.log(`│  Total output tokens: ${suiteTokens.totalOutputTokens.toLocaleString()}`.padEnd(55) + '│');
+    console.log(`│  Total tokens      : ${(suiteTokens.totalInputTokens + suiteTokens.totalOutputTokens).toLocaleString()}`.padEnd(55) + '│');
+    console.log(`└${bar}┘\n`);
+  }
 
   if (totalFailed > 0) {
     process.exit(1);
