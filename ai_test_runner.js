@@ -670,6 +670,12 @@ class StatelessMCPRunner {
         continue;
       }
 
+      // Normalize filename for browser_take_screenshot:
+      // MCP server cwd is 'files/', so strip leading 'files/' to avoid double-prefix
+      if (toolName === 'browser_take_screenshot' && step.params?.filename) {
+        step.params.filename = step.params.filename.replace(/^\.?\/?(files\/)+/, '');
+      }
+
       // Execute MCP tool
       let stepPassed = false;
       let needsResnapshot = false;
