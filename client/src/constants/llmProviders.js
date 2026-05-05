@@ -15,7 +15,8 @@ export const MODELS_BY_PROVIDER = {
     { value: 'gpt-5.2-codex', label: 'GPT-5.2-codex' },
     { value: 'gpt-5.2', label: 'GPT-5.2' },
     { value: 'gpt-5.3-codex', label: 'GPT-5.3-codex' },
-    { value: 'gpt-5.4', label: 'GPT-5.4' }
+    { value: 'gpt-5.4', label: 'GPT-5.4' },
+    { value: 'gpt-5.5', label: 'GPT-5.5' }
   ],
   anthropic: [
     { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },

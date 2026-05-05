@@ -21,7 +21,7 @@ export function buildSystemPrompt(testText, stepCount, domSnapshot, mcpTools, is
   }));
 
   if (isVisualRegression) {
-    toolsInfo = toolsInfo.filter(t => t.name === 'browser_run_code' || t.name.includes('screenshot'));
+    toolsInfo = toolsInfo.filter(t => t.name === 'browser_run_code_unsafe' || t.name.includes('screenshot'));
   }
 
   toolsInfo.push({

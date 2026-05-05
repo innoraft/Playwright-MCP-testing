@@ -11,6 +11,7 @@ export default function Reports({ initialReport }) {
   const [filterResult, setFilterResult] = useState('all'); // 'all' | 'pass' | 'fail'
   const [confirmDelete, setConfirmDelete] = useState(null);
   const pollRef = useRef(null);
+  const hasAutoSelected = useRef(false);
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
@@ -26,18 +27,21 @@ export default function Reports({ initialReport }) {
       const data = await res.json();
       setReports(data);
 
-      // Auto-select the initial report or the newest one
-      if (initialReport) {
-        setSelectedReport(initialReport);
-      } else if (data.length > 0 && !selectedReport) {
-        setSelectedReport(data[0].name);
+      // Auto-select only on first load and only if user hasn't picked one yet
+      if (!hasAutoSelected.current && data.length > 0) {
+        hasAutoSelected.current = true;
+        if (initialReport) {
+          setSelectedReport(initialReport);
+        } else {
+          setSelectedReport(data[0].name);
+        }
       }
     } catch {
       if (!silent) showToast('Could not load reports', 'error');
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [showToast, initialReport]);
+  }, [showToast, authFetch, initialReport]);
 
   useEffect(() => {
     fetchReports();
@@ -51,7 +55,7 @@ export default function Reports({ initialReport }) {
     return () => clearInterval(pollRef.current);
   }, [fetchReports]);
 
-  // ── Handle initialReport changes ─────────────────────
+  // ── Handle initialReport changes (e.g. navigating from TestRunner) ─────
   useEffect(() => {
     if (initialReport) {
       setSelectedReport(initialReport);

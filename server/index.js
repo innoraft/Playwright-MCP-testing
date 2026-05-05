@@ -678,7 +678,8 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
     cwd: PROJECT_ROOT,
     env: { ...process.env },
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true
   });
 
   state.process = child;
@@ -871,7 +872,38 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
   }
 
   try {
+    const pid = state.process.pid;
+
+    // Send SIGTERM first to trigger cleanup handlers in the child
     state.process.kill('SIGTERM');
+
+    // Force-kill the entire process group after a short grace period
+    // This ensures Chromium, MCP server, and all subprocesses are terminated
+    setTimeout(() => {
+      try {
+        // Kill the entire process group (negative PID)
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        // Process group may already be dead, try direct kill
+        try {
+          state.process.kill('SIGKILL');
+        } catch { /* already dead */ }
+      }
+
+      // Ensure state is cleaned up
+      state.status = 'idle';
+      state.result = 'stopped';
+      state.process = null;
+
+      // Notify SSE clients that the run is done
+      broadcastSSE(req.user.userId, 'done', {
+        runId: state.runId,
+        result: 'stopped',
+        reportFile: null,
+        exitCode: -1
+      });
+    }, 1500);
+
     res.json({ success: true, message: 'Test run stopped' });
   } catch (err) {
     console.error('Failed to stop runner:', err);
