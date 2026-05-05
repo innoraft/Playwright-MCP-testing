@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import LiveMonitor from '../components/LiveMonitor';
 
-export default function TestRunner({ onNavigateToReport }) {
+export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const { authFetch, token } = useAuth();
   const [tests, setTests] = useState([]);
   const [selectedTest, setSelectedTest] = useState('');
@@ -75,6 +75,7 @@ export default function TestRunner({ onNavigateToReport }) {
         const data = JSON.parse(e.data);
         setStatus('done');
         setResult(data.result);
+        if (onRunningChange) onRunningChange(false);
 
         // Auto-navigate to reports after a short delay
         if (data.reportFile && onNavigateToReport) {
@@ -92,8 +93,9 @@ export default function TestRunner({ onNavigateToReport }) {
       // SSE connection lost — if still running, it may have ended
       es.close();
       eventSourceRef.current = null;
+      if (onRunningChange) onRunningChange(false);
     };
-  }, [onNavigateToReport]);
+  }, [onNavigateToReport, onRunningChange]);
 
   // ── Run Test ──────────────────────────────────────────
   const handleRun = async () => {
@@ -104,6 +106,7 @@ export default function TestRunner({ onNavigateToReport }) {
     setResult(null);
     setStatus('running');
     setScreencastFrame(null);
+    if (onRunningChange) onRunningChange(true);
 
     try {
       const res = await authFetch('/api/runner/run', {
@@ -121,6 +124,7 @@ export default function TestRunner({ onNavigateToReport }) {
     } catch (err) {
       showToast(err.message, 'error');
       setStatus('idle');
+      if (onRunningChange) onRunningChange(false);
     }
   };
 
@@ -129,6 +133,14 @@ export default function TestRunner({ onNavigateToReport }) {
     try {
       await authFetch('/api/runner/stop', { method: 'POST' });
       showToast('Test run stopped');
+      setStatus('done');
+      setResult('stopped');
+      if (onRunningChange) onRunningChange(false);
+      // Close SSE connection immediately
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     } catch {
       showToast('Failed to stop test', 'error');
     }

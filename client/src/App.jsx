@@ -17,6 +17,7 @@ function App() {
   const [activePage, setActivePage] = useState('test-suites');
   const [pendingReport, setPendingReport] = useState(null);
   const [showBestPractices, setShowBestPractices] = useState(false);
+  const [testRunning, setTestRunning] = useState(false);
 
   // Redirect to allowed page when role changes
   useEffect(() => {
@@ -47,6 +48,10 @@ function App() {
 
   // Clear pending report when navigating away from reports
   const handlePageChange = (page) => {
+    // Guard: block navigation while a test is running
+    if (testRunning && page !== 'test-runner') {
+      return;
+    }
     // Guard: prevent non-admin from accessing admin pages
     if (!isAdmin && (page === 'llm-config' || page === 'users')) {
       return;
@@ -79,6 +84,7 @@ function App() {
               <button
                 className={`sidebar-link ${activePage === 'llm-config' ? 'active' : ''}`}
                 onClick={() => handlePageChange('llm-config')}
+                disabled={testRunning}
               >
                 <span className="sidebar-link-icon">🧠</span>
                 LLM Config
@@ -86,6 +92,7 @@ function App() {
               <button
                 className={`sidebar-link ${activePage === 'users' ? 'active' : ''}`}
                 onClick={() => handlePageChange('users')}
+                disabled={testRunning}
               >
                 <span className="sidebar-link-icon">👤</span>
                 Users
@@ -97,6 +104,7 @@ function App() {
           <button
             className={`sidebar-link ${activePage === 'test-suites' ? 'active' : ''}`}
             onClick={() => handlePageChange('test-suites')}
+            disabled={testRunning}
           >
             <span className="sidebar-link-icon">📋</span>
             Test Suites
@@ -111,6 +119,7 @@ function App() {
           <button
             className={`sidebar-link ${activePage === 'reports' ? 'active' : ''}`}
             onClick={() => handlePageChange('reports')}
+            disabled={testRunning}
           >
             <span className="sidebar-link-icon">📊</span>
             Reports
@@ -120,6 +129,7 @@ function App() {
           <button
             className={`sidebar-link ${activePage === 'baselines' ? 'active' : ''}`}
             onClick={() => handlePageChange('baselines')}
+            disabled={testRunning}
           >
             <span className="sidebar-link-icon">🖼️</span>
             Baselines
@@ -127,6 +137,7 @@ function App() {
           <button
             className={`sidebar-link ${activePage === 'files' ? 'active' : ''}`}
             onClick={() => handlePageChange('files')}
+            disabled={testRunning}
           >
             <span className="sidebar-link-icon">📂</span>
             Files & Assets
@@ -136,6 +147,7 @@ function App() {
           <button
             className="sidebar-link"
             onClick={() => setShowBestPractices(true)}
+            disabled={testRunning}
           >
             <span className="sidebar-link-icon">📖</span>
             Best Practices
@@ -176,7 +188,7 @@ function App() {
         {activePage === 'llm-config' && isAdmin && <LLMConfig />}
         {activePage === 'users' && isAdmin && <UserManagement />}
         {activePage === 'test-suites' && <TestSuites />}
-        {activePage === 'test-runner' && <TestRunner onNavigateToReport={handleNavigateToReport} />}
+        {activePage === 'test-runner' && <TestRunner onNavigateToReport={handleNavigateToReport} onRunningChange={setTestRunning} />}
         {activePage === 'reports' && <Reports initialReport={pendingReport} />}
         {activePage === 'baselines' && <BaselineManager />}
         {activePage === 'files' && <FileBrowser />}

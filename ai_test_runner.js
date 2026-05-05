@@ -171,7 +171,12 @@ class StatelessMCPRunner {
    * @param {string|null} [action.screenshot] - Screenshot path if captured
    */
   recordAction({ tool, params, status, assertion, error, duration, screenshot, diffScreenshot, visualResult, testStep }) {
-    this.testResults.actions.push({
+    const normalizedStep = typeof testStep === 'string' ? testStep.trim() : null;
+    const existingIdx = normalizedStep
+      ? this.testResults.actions.findIndex(a => a.testStep === normalizedStep)
+      : -1;
+
+    const nextAction = {
       tool,
       params,
       status,
@@ -181,10 +186,24 @@ class StatelessMCPRunner {
       screenshot: screenshot || null,
       diffScreenshot: diffScreenshot || null,
       visualResult: visualResult || null,
-      testStep: testStep || null,
+      testStep: normalizedStep,
       timestamp: new Date()
-    });
+    };
 
+    if (existingIdx !== -1) {
+      const previousStatus = this.testResults.actions[existingIdx].status;
+      this.testResults.actions[existingIdx] = nextAction;
+
+      if (previousStatus !== status) {
+        if (previousStatus === 'passed') this.testResults.passed--;
+        if (previousStatus === 'failed') this.testResults.failed--;
+        if (status === 'passed') this.testResults.passed++;
+        if (status === 'failed') this.testResults.failed++;
+      }
+      return;
+    }
+
+    this.testResults.actions.push(nextAction);
     if (status === 'passed') this.testResults.passed++;
     if (status === 'failed') this.testResults.failed++;
   }
@@ -651,7 +670,7 @@ class StatelessMCPRunner {
     const attemptedSteps = new Set();
     // Allow at most 1 re-plan per step to avoid infinite loops
     const replanCount = { total: 0 };
-    const MAX_REPLANS = 3;
+    const MAX_REPLANS = 2;
 
     while (planIndex < executionPlan.length) {
       const step = executionPlan[planIndex];
@@ -670,6 +689,12 @@ class StatelessMCPRunner {
         continue;
       }
 
+      // Normalize filename for browser_take_screenshot:
+      // MCP server cwd is 'files/', so strip leading 'files/' to avoid double-prefix
+      if (toolName === 'browser_take_screenshot' && step.params?.filename) {
+        step.params.filename = step.params.filename.replace(/^\.?\/?(files\/)+/, '');
+      }
+
       // Execute MCP tool
       let stepPassed = false;
       let needsResnapshot = false;
@@ -677,16 +702,6 @@ class StatelessMCPRunner {
       try {
         const { result, duration } = await this.executeMCP(toolName, step.params);
         const screenshotPath = this.extractScreenshotPath(result);
-
-        // If this step was previously recorded as failed (retried via re-plan),
-        // remove the old failed entry so only the final outcome remains.
-        const prevFailIdx = this.testResults.actions.findIndex(
-          a => a.testStep === originalStep.trim() && a.status === 'failed'
-        );
-        if (prevFailIdx !== -1) {
-          this.testResults.actions.splice(prevFailIdx, 1);
-          this.testResults.failed--;
-        }
 
         this.recordAction({
           tool: `mcp_${step.tool}`, params: step.params,
@@ -920,6 +935,7 @@ async function main() {
     log.info(`${'='.repeat(60)}\n`);
 
     const runner = new StatelessMCPRunner();
+    activeRunner = runner;
 
     try {
       await runner.initializeMCP();
@@ -956,6 +972,7 @@ async function main() {
 
       runner.cleanupStrayFiles();
       await runner.cleanup();
+      activeRunner = null;
     }
   }
 
@@ -1000,10 +1017,23 @@ async function main() {
 }
 
 // ---------- CLEANUP HANDLERS ----------
-process.on('SIGINT', async () => {
-  log.warn('Interrupted. Cleaning up...');
-  process.exit(0);
-});
+let activeRunner = null;
+
+async function gracefulShutdown(signal) {
+  log.warn(`${signal} received. Cleaning up...`);
+  if (activeRunner) {
+    try {
+      await activeRunner.cleanup();
+    } catch (err) {
+      log.error('Cleanup error during shutdown', err);
+    }
+    activeRunner = null;
+  }
+  process.exit(signal === 'SIGTERM' ? 143 : 0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('unhandledRejection', (err) => {
   log.error('Unhandled rejection', err);
