@@ -1,93 +1,73 @@
 /**
- * Builds a compact re-plan prompt for when a step fails or navigation
- * changes the page. Includes only the REMAINING steps and the NEW snapshot.
+ * Builds a focused single-step retry prompt.
+ * Instead of re-planning ALL remaining steps, this targets only the failed step
+ * using a section-specific snapshot for precision.
+ *
+ * @param {string} failedStepText - The test step that failed
+ * @param {string} sectionSnapshot - Section-specific DOM snapshot (focused area)
+ * @param {string} failError - Error message from the failure
+ * @param {Object} originalStep - The original plan step that failed
+ * @param {Map} mcpTools - Available MCP tools
+ * @returns {string} System prompt for single-step retry
  */
-export function buildReplanPrompt(
-  remainingStepsText,
-  domSnapshot,
-  failedStep,
+export function buildSingleStepRetryPrompt(
+  failedStepText,
+  sectionSnapshot,
   failError,
+  originalStep,
   mcpTools,
-  remainingCount,
 ) {
   const toolsInfo = Array.from(mcpTools.values()).map((tool) => ({
     name: tool.name,
     description: tool.description,
     schema: tool.inputSchema,
   }));
-  toolsInfo.push({
-    name: "visual_regression_check",
-    description:
-      "Compares page screenshot at a viewport breakpoint against a stored baseline.",
-    schema: {
-      type: "object",
-      properties: {
-        breakpoint: { type: "string", description: 'e.g. "1280px"' },
-        screenshotPath: {
-          type: "string",
-          description: 'e.g. "files/screenshots/home-1280.png"',
-        },
-      },
-      required: ["breakpoint", "screenshotPath"],
-    },
-  });
 
-  const failContext = failedStep
-    ? `\n## FAILURE CONTEXT\nThe step "${failedStep}" failed with: ${failError}\nYou must re-plan this failed step AND all remaining steps below using the new snapshot.`
-    : `\n## CONTEXT\nThe page has changed due to navigation. Re-plan the remaining steps using the new snapshot.`;
+  return `You are an intelligent Test Automation Planner. A single test step has FAILED and you must fix it.
 
-  return `You are an intelligent Test Automation Planner. Re-plan the remaining test steps using the updated DOM snapshot.
-${failContext}
+## FAILURE CONTEXT
+- **Step that failed:** "${failedStepText}"
+- **Tool used:** ${originalStep.tool}
+- **Parameters used:** ${JSON.stringify(originalStep.params)}
+- **Error:** ${failError}
+
+## YOUR TASK
+Analyze the error and the DOM snapshot below to produce a CORRECTED plan for this ONE step.
+The previous attempt failed — you must find the correct element ref or fix the tool/params.
 
 ## AVAILABLE TOOLS
 ${JSON.stringify(toolsInfo, null, 2)}
 
-## UPDATED DOM SNAPSHOT
+## DOM SNAPSHOT (section where the element exists)
 \`\`\`
-${domSnapshot || "(unavailable)"}
+${sectionSnapshot || "(unavailable)"}
 \`\`\`
 
-## REMAINING TEST STEPS
-${remainingStepsText}
+## RULES (MANDATORY)
 
-## PLANNING LOGIC & RULES (MANDATORY)
+### Tool Selection
+- **Analyze the step intent:** identify the core verb (click, type, select, scroll, etc.) and the target.
+- **browser_snapshot is ONLY for observing** — NEVER use it for action steps.
+- **Action steps MUST use action tools:** browser_click, browser_type, browser_select_option, browser_press_key, browser_hover, browser_navigate, browser_drag, browser_handle_dialog, browser_run_code, etc.
+- For alert/confirm/prompt dialogs, use browser_handle_dialog.
+- Only use tools from the AVAILABLE TOOLS list.
+- Dont use browser_evaluate for action purpose, its just a verification tool
 
-### 1. Tool Selection Strategy
-- **Read the step thoroughly** and extract the context of the step.
-- **Analyze the Intent:** For each test step, identify the core verb (action) and the target (noun/data).
-- **Semantic Matching:** Compare the step's intent against the **description** field of every available tool.
-- **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
-- **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
+### Parameter Rules
+- **Refs appear in the snapshot as [e45] but MUST be passed as bare values: "e45", "e57".
+Never pass [e45] or ref=e45 — always strip the brackets when using as a parameter value.
+- Do NOT use CSS selectors or IDs as refs.
+- Refs look like "eXX" where XX is a number — find them in the snapshot as [eXX] or [ref=eXX].
+- If the original ref was wrong, find the CORRECT ref from the snapshot that matches the step intent.
+- Match types exactly (string, boolean, integer) per the tool schema.
 
-### 2. CRITICAL — Tool Misuse Prevention
-- **browser_snapshot is ONLY for observing the page state.** It is NOT an action tool.
-- **NEVER use browser_snapshot for steps that say "click", "type", "select", "scroll", "navigate", "press", "drag", "hover", "choose", "open", "close", "toggle", "submit", "reset", "search", "filter", "switch", "expand", "collapse", or any other interactive verb.**
-- If a step says "Click the X button" → use browser_click, NOT browser_snapshot.
-- If a step says "Type a keyword" → use browser_type, NOT browser_snapshot.
-- If a step says "Select an option" → use browser_select_option or browser_click, NOT browser_snapshot.
-- If a step says "Click a dropdown" → use browser_click, NOT browser_snapshot.
-- **Every action step MUST use an action tool** (browser_click, browser_type, browser_select_option, browser_navigate, browser_press_key, browser_hover, browser_drag, browser_handle_dialog, browser_tab_close, browser_tab_new, browser_file_upload, browser_run_code, etc.)
-- For alert/confirm/prompt dialogs, use browser_handle_dialog, NOT browser_run_code.
-
-### 3. Parameter Generation (Schema Compliance)
-- **Schema Mapping:** Generate parameters that strictly adhere to the selected tool's \`schema\`.
-- **Data Extraction:** Extract values (selectors, text, refs, numbers) directly from the test step and the DOM snapshot.
-- **Use refs from the snapshot** (e.g. ref="eXX") for element interactions — do NOT use CSS selectors or IDs as refs.
-- **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
-
-### 4. Step Classification
-- **Action:** If the step implies interaction (click, type, navigate, scroll, select, etc.), set \`isAssertion: false\`.
-- **Assertion:** If the step implies verification (verify, check, ensure, validate, confirm visibility, etc.), set \`isAssertion: true\`.
-
-### 5. Code Generation (If Applicable)
-- If a tool requires a code/script parameter:
-  - Generate self-contained, synchronous code.
-  - NEVER invoke the function (no trailing \`()\`).
-  - Valid: \`"() => { return true; }"\`
-  - Invalid: \`"(() => { return true; })()"\`
+### Common Fixes
+- If error says "element not found" → the ref was wrong, find the correct one in the snapshot.
+- If error says "not visible" or "not interactable" → element may be hidden; try a parent/sibling or use browser_run_code to scroll it into view first.
+- If error says "MCP Tool returned false" → the assertion failed; check if a different ref or approach is needed.
+- Never modify the test steps, the element should be as it is as given in the test step.
 
 ## OUTPUT
-Return EXACTLY ${remainingCount} entries as a SINGLE VALID JSON ARRAY. No markdown, no explanation.
-Each entry MUST use the stepIndex value shown in parentheses in REMAINING TEST STEPS above — do NOT change or reorder stepIndex values.
-[{"stepIndex":<n>,"tool":"<NAME>","params":{...},"isAssertion":<bool>,"description":"<why>"}]`;
+Return a SINGLE JSON OBJECT (not an array). No markdown, no explanation.
+{"tool":"<TOOL_NAME>","params":{...},"isAssertion":<bool>,"description":"<what_you_fixed>"}`;
 }

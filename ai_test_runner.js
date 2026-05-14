@@ -23,7 +23,9 @@ import llmConfig from './config/llm.config.js';
 import { VisualRegressionChecker } from './visual-regression.js';
 import { CDPService } from './src/cdp/cdp.service.js';
 import { buildSystemPrompt } from './src/prompts/initial.prompt.js';
-import { buildReplanPrompt } from './src/prompts/retry.prompt.js';
+import { buildSingleStepRetryPrompt } from './src/prompts/retry.prompt.js';
+import { compressSnapshot } from './src/resolver/snapshot-parserv2.js';
+import { SectionExtractor } from './src/resolver/section-extractor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +76,7 @@ class StatelessMCPRunner {
     });
 
     this.visualChecker = new VisualRegressionChecker();
+    this.sectionExtractor = new SectionExtractor();
     // Token accounting
     this.tokenUsage = {
       totalInputTokens:  0,
@@ -379,7 +382,7 @@ class StatelessMCPRunner {
       throw error;
     }
 
-    // Check if result contains "false" in text content
+    // Check if result indicates failure in text content
     if (Array.isArray(result.content)) {
       const textBlock = result.content.find(c => c.type === 'text')?.text;
 
@@ -389,9 +392,19 @@ class StatelessMCPRunner {
 
         if (match) {
           const value = match[1].trim().toLowerCase();
-          // console.log(value)
+
+          // Explicit assertion failure
           if (value === 'false') {
             const error = new Error(`MCP Tool returned false`);
+            error.duration = duration;
+            throw error;
+          }
+
+          // undefined/null means element not found or action had no effect
+          if (value === 'undefined' || value === 'null') {
+            const error = new Error(
+              `MCP Tool returned ${value} — element not found or action had no effect`
+            );
             error.duration = duration;
             throw error;
           }
@@ -596,6 +609,107 @@ class StatelessMCPRunner {
     }
   }
 
+  /**
+   * Retries a single failed step using a section-specific snapshot.
+   * Takes a fresh DOM snapshot, extracts only the relevant section,
+   * then asks the LLM to fix just this one step.
+   *
+   * @param {Object} originalPlanStep - The plan step that failed
+   * @param {string} stepText - Human-readable step description
+   * @param {string} errorMessage - Error from the failed execution
+   * @param {Array<string>} testSteps - All test step lines (for context)
+   * @param {number} maxRetries - Maximum retry attempts
+   * @returns {Promise<boolean>} Whether the step eventually passed
+   */
+  async _retryFailedStep(originalPlanStep, stepText, errorMessage, testSteps, maxRetries) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      log.info(`🔄 Retry ${attempt}/${maxRetries} for: "${stepText}"`);
+
+      // 1. Take a fresh full snapshot
+      const freshSnapshot = await this.takeDOMSnapshot();
+      if (!freshSnapshot) {
+        log.warn('Retry: could not take fresh snapshot');
+        continue;
+      }
+
+      // 2. Extract the relevant section using keywords from the step
+      const { section, sectionRef, confidence } = this.sectionExtractor.extract(
+        freshSnapshot, stepText
+      );
+
+      log.info(
+        `📋 Section extracted: ref=${sectionRef || 'none'}, ` +
+        `confidence=${confidence.toFixed(2)}, ` +
+        `lines=${section.split('\n').length} (full snapshot: ${freshSnapshot.split('\n').length})`
+      );
+
+      // 3. Compress section snapshot before sending to LLM
+      let sectionForLLM = section;
+      if (section && section.trim()) {
+        try {
+          const { compact, stats } = compressSnapshot(section, { keepImages: false });
+          if (compact && compact.trim()) {
+            sectionForLLM = compact;
+            log.info(`📦 Retry snapshot compressed by ${stats.reductionPct}`);
+          }
+        } catch (compressErr) {
+          log.warn(`Retry snapshot compression failed, using raw section: ${compressErr.message}`);
+        }
+      }
+
+      // 4. Ask LLM to fix this single step with focused section context
+      const retryPrompt = buildSingleStepRetryPrompt(
+        stepText,
+        sectionForLLM,
+        errorMessage,
+        originalPlanStep,
+        this.mcpTools
+      );
+
+      try {
+        const response = await this.callLLM([
+          { role: 'system', content: retryPrompt },
+          { role: 'user', content: 'Fix this step. Return a single JSON object.' }
+        ]);
+
+        let fixJson = response.content
+          .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const fixedStep = JSON.parse(fixJson);
+
+        if (!fixedStep || !fixedStep.tool) {
+          log.warn(`Retry ${attempt}: LLM returned invalid fix`);
+          continue;
+        }
+
+        const fixedToolName = fixedStep.tool.replace(/^mcp_/, '');
+        log.info(`🔧 Retry using: ${fixedToolName}(${JSON.stringify(fixedStep.params).substring(0, 100)}...)`);
+
+        // 5. Execute the fixed step
+        const { result, duration } = await this.executeMCP(fixedToolName, fixedStep.params);
+        const screenshotPath = this.extractScreenshotPath(result);
+
+        // Success — record the corrected action
+        this.recordAction({
+          tool: `mcp_${fixedStep.tool}`, params: fixedStep.params,
+          status: 'passed', assertion: fixedStep.isAssertion || false,
+          duration, screenshot: screenshotPath,
+          testStep: stepText
+        });
+
+        log.success(`✓ Retry ${attempt} succeeded for: "${stepText}"`);
+        return true;
+
+      } catch (retryErr) {
+        log.warn(`Retry ${attempt} failed: ${retryErr.message}`);
+        // Update error for next attempt
+        errorMessage = retryErr.message;
+      }
+    }
+
+    log.error(`All ${maxRetries} retries exhausted for: "${stepText}"`);
+    return false;
+  }
+
   async runTest(testText, testName) {
     const yamlNameMatch = testText.match(/^name:\s*(.+)$/m);
     const logicalName = yamlNameMatch ? yamlNameMatch[1].trim() : testName;
@@ -648,8 +762,38 @@ class StatelessMCPRunner {
       log.info('📸 Skipping DOM snapshot for visual regression test...');
     }
 
+    if (process.env.SNAPSHOT_DEBUG === '1') {
+      const { compact, stats } = compressSnapshot(initialSnapshot, { keepImages: false });
+
+      log.info('Snapshot debug mode: skipping planner/generator/healer');
+      log.info(`Snapshot reduced by ${stats.reductionPct}`);
+
+      console.log('SNAPSHOT_COMPACT_START');
+      console.log(compact);
+      console.log('SNAPSHOT_COMPACT_END');
+
+      console.log('SNAPSHOT_STATS_START');
+      console.log(JSON.stringify(stats, null, 2));
+      console.log('SNAPSHOT_STATS_END');
+
+      return this.testResults;
+    }
+
+    let planningSnapshot = initialSnapshot;
+    if (!isVisualRegression && initialSnapshot && initialSnapshot.trim()) {
+      try {
+        const { compact, stats } = compressSnapshot(initialSnapshot, { keepImages: false });
+        if (compact && compact.trim()) {
+          planningSnapshot = compact;
+          log.info(`📦 Using compressed snapshot for planning (${stats.reductionPct} smaller)`);
+        }
+      } catch (compressErr) {
+        log.warn(`Planning snapshot compression failed, using raw snapshot: ${compressErr.message}`);
+      }
+    }
+
     // ── Phase 2: Single LLM plan with snapshot ────────────────────────
-    let executionPlan = await this.generateExecutionPlan(testText, testSteps, initialSnapshot, isVisualRegression);
+    let executionPlan = await this.generateExecutionPlan(testText, testSteps, planningSnapshot, isVisualRegression);
 
     // Remove duplicate navigation step — Phase 0 already navigated to the URL
     if (urlMatch) {
@@ -664,13 +808,9 @@ class StatelessMCPRunner {
       });
     }
 
-    // Phase 3: Execute locally, re-plan on failure/navigation
+    // Phase 3: Execute locally, retry individual failed steps with section snapshots
     let planIndex = 0;
-    // Track which original test steps have been attempted (1-based)
-    const attemptedSteps = new Set();
-    // Allow at most 1 re-plan per step to avoid infinite loops
-    const replanCount = { total: 0 };
-    const MAX_REPLANS = 2;
+    const MAX_STEP_RETRIES = 1; // Max retries per individual step
 
     while (planIndex < executionPlan.length) {
       const step = executionPlan[planIndex];
@@ -682,7 +822,7 @@ class StatelessMCPRunner {
 
       const toolName = step.tool.replace(/^mcp_/, '');
 
-      // Visual regression (local, no re-plan needed)
+      // Visual regression (local, no retry needed)
       if (toolName === 'visual_regression_check') {
         this.executeVisualRegressionStep(step, originalStep, testName);
         planIndex++;
@@ -697,7 +837,6 @@ class StatelessMCPRunner {
 
       // Execute MCP tool
       let stepPassed = false;
-      let needsResnapshot = false;
 
       try {
         const { result, duration } = await this.executeMCP(toolName, step.params);
@@ -712,92 +851,24 @@ class StatelessMCPRunner {
 
         log.success(`✓ Step ${stepNum} passed${step.isAssertion ? ' (assertion)' : ''}`);
         stepPassed = true;
-        // needsResnapshot stays false on success — re-plan only when a step fails.
-        // Triggering re-plan after every navigation caused the LLM to regenerate
-        // the remaining plan with wrong tools and duplicate/reordered steps.
       } catch (err) {
         log.error(`✗ Step ${stepNum} failed`, err.message);
 
-        this.recordAction({
-          tool: `mcp_${step.tool}`, params: step.params,
-          status: 'failed', assertion: step.isAssertion || false,
-          error: err.message, duration: err.duration || 0,
-          testStep: originalStep.trim()
-        });
-
-        needsResnapshot = !isVisualRegression; // Failed → likely stale refs (skip if VR)
-      }
-
-      // ── Phase 4 & 5: Re-snapshot + re-plan on failure or navigation ──
-      if (needsResnapshot && replanCount.total < MAX_REPLANS) {
-        // If step failed, include it in remaining steps for re-plan
-        const startIdx = stepPassed ? planIndex + 1 : planIndex;
-        const remainingPlan = executionPlan.slice(startIdx);
-        if (remainingPlan.length === 0) {
-          planIndex++;
-          continue;
+        // ── Phase 4: Section-specific retry for failed step ──
+        if (!isVisualRegression) {
+          stepPassed = await this._retryFailedStep(
+            step, originalStep.trim(), err.message, testSteps, MAX_STEP_RETRIES
+          );
         }
 
-        log.info('📸 Page changed — taking fresh snapshot for re-planning...');
-        const freshSnapshot = await this.takeDOMSnapshot();
-
-        // Collect the ORIGINAL stepIndex values so we can remap after re-plan
-        const remainingOriginalIndices = remainingPlan.map(s => s.stepIndex);
-        // Annotate each step with its stepIndex so the LLM preserves the order
-        const remainingStepsText = remainingPlan
-          .map(s => {
-            const text = testSteps[s.stepIndex - 1];
-            return text ? `(stepIndex ${s.stepIndex}) ${text}` : '';
-          })
-          .filter(Boolean)
-          .join('\n');
-
-        if (remainingStepsText.trim()) {
-          log.llm(`Re-planning ${remainingPlan.length} remaining steps with fresh snapshot...`);
-          replanCount.total++;
-
-          const replanPrompt = buildReplanPrompt(
-            remainingStepsText, freshSnapshot,
-            stepPassed ? null : originalStep.trim(),
-            stepPassed ? null : this.testResults.actions[this.testResults.actions.length - 1]?.error,
-            this.mcpTools,
-            remainingPlan.length
-          );
-
-          try {
-            const response = await this.callLLM([
-              { role: 'system', content: replanPrompt },
-              { role: 'user', content: 'Re-plan the remaining steps as JSON array.' }
-            ]);
-
-            let planJson = response.content
-              .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const newPlan = JSON.parse(planJson);
-
-            // Trim to at most the expected remaining count to prevent LLM over-generation
-            if (newPlan.length > remainingOriginalIndices.length) {
-              newPlan.splice(remainingOriginalIndices.length);
-            }
-
-            // Remap stepIndex to original test step indices so that
-            // rawStep lookup and deduplication work correctly.
-            newPlan.forEach((s, i) => {
-              if (i < remainingOriginalIndices.length) {
-                s.stepIndex = remainingOriginalIndices[i];
-              }
-            });
-
-            log.success(`Re-plan generated: ${newPlan.length} steps (remapped to original indices)`);
-
-            // Replace remaining portion of execution plan
-            const completedPlan = executionPlan.slice(0, startIdx);
-            executionPlan = [...completedPlan, ...newPlan];
-            // Resume from the first re-planned step
-            planIndex = completedPlan.length;
-            continue;
-          } catch (replanErr) {
-            log.warn(`Re-plan failed: ${replanErr.message}. Continuing with original plan.`);
-          }
+        // If retry didn't succeed, record final failure
+        if (!stepPassed) {
+          this.recordAction({
+            tool: `mcp_${step.tool}`, params: step.params,
+            status: 'failed', assertion: step.isAssertion || false,
+            error: err.message, duration: err.duration || 0,
+            testStep: originalStep.trim()
+          });
         }
       }
 

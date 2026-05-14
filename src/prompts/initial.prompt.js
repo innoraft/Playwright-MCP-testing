@@ -48,7 +48,7 @@ export function buildSystemPrompt(testText, stepCount, domSnapshot, mcpTools, is
 
   // Include DOM snapshot so the LLM can generate ref-based params
   const snapshotBlock = domSnapshot
-    ? `\n3. **CURRENT PAGE DOM SNAPSHOT (use refs like ref="eXX" from this):**\n\`\`\`\n${domSnapshot}\n\`\`\``
+    ? `\n3. **CURRENT PAGE DOM SNAPSHOT (use refs like [e45] or [ref=e45] from this):**\n\`\`\`\n${domSnapshot}\n\`\`\``
     : "";
 
   return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
@@ -79,8 +79,9 @@ Do NOT use "browser_run_code" for modal dialogs.
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
 - **Data Extraction:** Extract values (selectors, text, numbers, logic) directly from the test step to populate the schema fields.
 - **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
-- **Ids, classes are not refs keep in mind that. If you select any tool which requires ref then you have to extract proper ref from the snapshot, otherwise
-it will throw illegitimate erros.
+- **Ids, classes are not refs. If a tool requires a ref, extract it from the snapshot.
+Refs appear in the snapshot as [e45] but you MUST pass them as bare values without 
+brackets: "e45", "e57" etc. Never pass [e45] or ref=e45 — always strip the brackets.
 
 ### 3. Step Classification
 - **Action:** If the step implies interaction (e.g., click, type, navigate, wait, scroll etc.), classify as \`isAssertion: false\`.
