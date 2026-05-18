@@ -305,31 +305,6 @@ export function compressSnapshot(rawSnapshot, opts = {}) {
   };
 }
 
-/**
- * Run inside page.evaluate() to get refs of viewport-visible elements.
- * Pass result as opts.visibleRefs for task-focused, minimal snapshots.
- *
- * Example:
- *   const visibleRefs = await page.evaluate(getVisibleRefsScript) as string[];
- *   const { compact } = compressSnapshot(snapshotYaml, {
- *     visibleRefs: new Set(visibleRefs)
- *   });
- */
-export const getVisibleRefsScript = `
-(function () {
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const refs = [];
-  document.querySelectorAll('[data-ref],[data-pw-ref],[aria-label],[role]').forEach(el => {
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && r.top < vh && r.bottom > 0 && r.left < vw && r.right > 0) {
-      const ref = el.getAttribute('data-ref') || el.getAttribute('data-pw-ref');
-      if (ref) refs.push(ref);
-    }
-  });
-  return refs;
-})()
-`;
-
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
