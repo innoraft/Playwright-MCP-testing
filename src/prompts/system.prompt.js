@@ -1,18 +1,27 @@
 /**
- * The prompt is used exclusively during the planning phase and does NOT
- * execute any tools or call the MCP layer.
+ * Static System Prompt Builder
+ * ─────────────────────────────
+ * Builds a system prompt that contains ONLY:
+ *   - Planner behavior & identity
+ *   - Execution constraints
+ *   - Output schema (JSON format)
+ *   - MCP tool schemas (injected from discovered tools)
+ *   - Parameter rules, step classification, code generation rules
+ *   - Safety rules
  *
- * @param {string} testText
- *   Full raw test definition containing all human-readable test steps.
+ * This prompt NEVER contains:
+ *   - User test steps
+ *   - DOM snapshot
+ *   - Runtime state or test content
  *
- * @param {number} stepCount
- *   Total number of test steps to be analyzed and planned.
+ * Built once after MCP tool discovery and reused for ALL LLM calls
+ * (initial planning AND retries).
  *
- * @returns {string}
- *   A fully constructed system prompt instructing the LLM to generate
- *   a strict, ordered execution plan as valid JSON.
+ * @param {Map} mcpTools - Discovered MCP tools map
+ * @param {boolean} [isVisualRegression=false] - Whether this is a VR test
+ * @returns {string} Static system prompt
  */
-export function buildSystemPrompt(testText, stepCount, domSnapshot, mcpTools, isVisualRegression = false) {
+export function buildStaticSystemPrompt(mcpTools, isVisualRegression = false) {
   // Dynamically inject tool definitions
   let toolsInfo = Array.from(mcpTools.values()).map((tool) => ({
     name: tool.name,
@@ -46,22 +55,12 @@ export function buildSystemPrompt(testText, stepCount, domSnapshot, mcpTools, is
     },
   });
 
-  // Include DOM snapshot so the LLM can generate ref-based params
-  const snapshotBlock = domSnapshot
-    ? `\n3. **CURRENT PAGE DOM SNAPSHOT (use refs like ref="eXX" from this):**\n\`\`\`\n${domSnapshot}\n\`\`\``
-    : "";
-
   return `You are an intelligent Test Automation Planner. Your objective is to map natural language test steps to a precise sequence of executable tool calls based strictly on the provided tool definitions.
-    Do not try to improve the test steps, don't try to imporve the test. Don't skip any step, Don't repeat any step, Dont change the sequence of the steps.
-    Generate EXACTLY ${stepCount} entries in the JSON array — one entry per test step, in the exact order they appear. No extra entries, no merged entries, no skipped entries.
+    Do not try to improve the test steps, don't try to improve the test. Don't skip any step, Don't repeat any step, Don't change the sequence of the steps.
     You have to follow all the rules below strictly.
 
-## INPUT CONTEXT
-1. **AVAILABLE TOOLS:**
+## AVAILABLE TOOLS
 ${JSON.stringify(toolsInfo, null, 2)}
-
-2. **TEST STEPS:**
-${testText}${snapshotBlock}
 
 ## PLANNING LOGIC & RULES
 
@@ -70,7 +69,7 @@ ${testText}${snapshotBlock}
 - **Analyze the Intent:** For each test step, identify the core verb (action) and the target (noun/data).
 - **Semantic Matching:** Compare the step's intent against the **description** field of every available tool.
 - **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
-- **Dont send invalid json.
+- **Don't send invalid json.
 - **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
 IMPORTANT: For steps that involve alerts, confirms, or prompts, you MUST use the "browser_handle_dialog" tool. 
 Do NOT use "browser_run_code" for modal dialogs.
@@ -79,8 +78,10 @@ Do NOT use "browser_run_code" for modal dialogs.
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
 - **Data Extraction:** Extract values (selectors, text, numbers, logic) directly from the test step to populate the schema fields.
 - **Type Safety:** Ensure boolean, integer, and string types match the schema definitions exactly.
-- **Ids, classes are not refs keep in mind that. If you select any tool which requires ref then you have to extract proper ref from the snapshot, otherwise
-it will throw illegitimate erros.
+- **Ids, classes are not refs. If a tool requires a ref, extract it from the DOM snapshot provided in the user message.
+Refs appear in the snapshot as [e45] but you MUST pass them as bare values without 
+brackets: "e45", "e57" etc. Never pass [e45] or ref=e45 — always strip the brackets.
+- **For evaluation you need to match the exact text given in the test step not a part of the text.
 
 ### 3. Step Classification
 - **Action:** If the step implies interaction (e.g., click, type, navigate, wait, scroll etc.), classify as \`isAssertion: false\`.
@@ -103,7 +104,7 @@ it will throw illegitimate erros.
 ### 5. Screenshot check
 - When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
   (relative to the working directory), never to the root directory.
-  Example: await page.screenshot({ path: './screenshots/step-${Date.now()}.png' })
+  Example: await page.screenshot({ path: './screenshots/step-\${Date.now()}.png' })
 - When calling visual_regression_check, always use the full path from the project root: 'files/screenshots/<filename>.png'
   Example: screenshotPath: 'files/screenshots/home_1280px.png'
 
@@ -119,7 +120,5 @@ Target JSON Structure:
     "isAssertion": <boolean>,
     "description": "<BRIEF_RATIONALE>"
   }
-]
-
-    Analyze the ${stepCount} steps and generate the execution plan now.`;
+]`;
 }
