@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import './PerformanceMetricsForm.css';
 
 const CATEGORIES = [
   { id: 'performance',    label: 'Performance',    icon: '⚡', desc: 'Core Web Vitals, Speed Index, TTI' },
@@ -96,7 +97,7 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
       {/* Target URLs */}
       <div className="field-groups-container">
         <div className="field-groups-header">
-          <span className="form-label" style={{ marginBottom: 0 }}>
+          <span className="form-label form-label--no-mb">
             Target URLs <span className="form-required">*</span>
           </span>
           <span className="form-label-hint">{urls.length} URL{urls.length !== 1 ? 's' : ''} — each gets its own report</span>
@@ -117,7 +118,7 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
                 </button>
               )}
             </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
+            <div className="form-group form-group--no-mb">
               <input
                 className={`form-input ${errors[`url-${index}`] ? 'form-input-error' : ''}`}
                 type="url"
@@ -144,43 +145,32 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
       <hr className="form-divider" />
 
       {/* Audit Categories */}
-      <div className="form-group" style={{ marginTop: '4px' }}>
+      <div className="form-group form-group--mt4">
         <label className="form-label">
           Audit Categories <span className="form-required">*</span>
         </label>
-        <p style={{ margin: '4px 0 12px', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>
+        <p className="perf-category-hint">
           Select which Lighthouse categories to audit. Both Mobile and Desktop audits will run automatically.
         </p>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
+        <div className="perf-category-grid">
           {CATEGORIES.map((cat) => {
             const checked = categories.includes(cat.id);
             return (
               <label
                 key={cat.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '10px',
-                  padding: '12px 14px',
-                  borderRadius: '10px',
-                  border: `2px solid ${checked ? 'var(--accent, #7c3aed)' : 'var(--border, #334155)'}`,
-                  background: checked ? 'var(--accent-subtle, rgba(124,58,237,0.12))' : 'var(--surface2, #1e293b)',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.15s, background 0.15s',
-                  userSelect: 'none',
-                }}
+                className={`perf-category-card${checked ? ' perf-category-card--checked' : ''}`}
               >
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => toggleCategory(cat.id)}
-                  style={{ marginTop: '2px', accentColor: 'var(--accent, #7c3aed)', flexShrink: 0 }}
+                  className="perf-category-card__checkbox"
                 />
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <div className="perf-category-card__title">
                     <span>{cat.icon}</span> {cat.label}
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted, #94a3b8)', marginTop: '2px' }}>
+                  <div className="perf-category-card__desc">
                     {cat.desc}
                   </div>
                 </div>
@@ -189,7 +179,7 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
           })}
         </div>
         {errors.categories && (
-          <span className="form-error-text" style={{ marginTop: '8px', display: 'block' }}>
+          <span className="form-error-text perf-category-error">
             {errors.categories}
           </span>
         )}

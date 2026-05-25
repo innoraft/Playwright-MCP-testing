@@ -1,0 +1,70 @@
+/* ── Category grid ───────────────────────────────────────── */
+.perf-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+/* ── Category card (checkbox tile) ──────────────────────── */
+.perf-category-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 2px solid var(--border, #334155);
+  background: var(--surface2, #1e293b);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.perf-category-card--checked {
+  border-color: var(--accent, #7c3aed);
+  background: var(--accent-subtle, rgba(124, 58, 237, 0.12));
+}
+
+.perf-category-card__checkbox {
+  margin-top: 2px;
+  accent-color: var(--accent, #7c3aed);
+  flex-shrink: 0;
+}
+
+.perf-category-card__title {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.perf-category-card__desc {
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  margin-top: 2px;
+}
+
+/* ── Category section helpers ────────────────────────────── */
+.perf-category-hint {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  color: var(--text-muted, #94a3b8);
+}
+
+.perf-category-error {
+  margin-top: 8px;
+  display: block;
+}
+
+/* ── Layout helpers ──────────────────────────────────────── */
+.form-group--mt4 {
+  margin-top: 4px;
+}
+
+.form-label--no-mb {
+  margin-bottom: 0;
+}
+
+.form-group--no-mb {
+  margin-bottom: 0;
+}
