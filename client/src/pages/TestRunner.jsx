@@ -11,6 +11,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const [logs, setLogs] = useState([]);
   const [toast, setToast] = useState(null);
   const [screencastFrame, setScreencastFrame] = useState(null);
+  const [isPerformanceTest, setIsPerformanceTest] = useState(false);
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -70,6 +71,15 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       } catch { /* ignore */ }
     });
 
+    es.addEventListener('perftest', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.isPerformanceTest) {
+          setIsPerformanceTest(true);
+        }
+      } catch { /* ignore */ }
+    });
+
     es.addEventListener('done', (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -106,6 +116,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
     setResult(null);
     setStatus('running');
     setScreencastFrame(null);
+    setIsPerformanceTest(false);
     if (onRunningChange) onRunningChange(true);
 
     try {
@@ -253,7 +264,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       </div>
 
       {/* Live Browser Monitor */}
-      <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} />
+      <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} isPerformanceTest={isPerformanceTest} />
 
       {/* Log Console */}
       <div className="log-console-container">
