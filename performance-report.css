@@ -123,14 +123,75 @@ body {
 }
 
 .score-gauge {
+  color: #9ca3af;
   width: 110px;
   height: 110px;
   border-radius: 50%;
-  background: conic-gradient(var(--sc) calc(var(--sv) * 1%), #e8eaed calc(var(--sv) * 1%));
+  background: conic-gradient(currentColor 0%, #e8eaed 0%);
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto 10px;
+}
+
+.score-gauge.score-good {
+  color: #0cce6b;
+}
+
+.score-gauge.score-needs-improvement {
+  color: #ffa400;
+}
+
+.score-gauge.score-poor {
+  color: #ff4e42;
+}
+
+.score-gauge.score-na {
+  color: #9ca3af;
+}
+
+.score-gauge.score-fill-0 {
+  background: conic-gradient(currentColor 0%, #e8eaed 0%);
+}
+
+.score-gauge.score-fill-10 {
+  background: conic-gradient(currentColor 10%, #e8eaed 10%);
+}
+
+.score-gauge.score-fill-20 {
+  background: conic-gradient(currentColor 20%, #e8eaed 20%);
+}
+
+.score-gauge.score-fill-30 {
+  background: conic-gradient(currentColor 30%, #e8eaed 30%);
+}
+
+.score-gauge.score-fill-40 {
+  background: conic-gradient(currentColor 40%, #e8eaed 40%);
+}
+
+.score-gauge.score-fill-50 {
+  background: conic-gradient(currentColor 50%, #e8eaed 50%);
+}
+
+.score-gauge.score-fill-60 {
+  background: conic-gradient(currentColor 60%, #e8eaed 60%);
+}
+
+.score-gauge.score-fill-70 {
+  background: conic-gradient(currentColor 70%, #e8eaed 70%);
+}
+
+.score-gauge.score-fill-80 {
+  background: conic-gradient(currentColor 80%, #e8eaed 80%);
+}
+
+.score-gauge.score-fill-90 {
+  background: conic-gradient(currentColor 90%, #e8eaed 90%);
+}
+
+.score-gauge.score-fill-100 {
+  background: conic-gradient(currentColor 100%, #e8eaed 100%);
 }
 
 .score-inner {
@@ -146,6 +207,22 @@ body {
 .score-num {
   font-size: 26px;
   font-weight: 800;
+}
+
+.score-num.score-good {
+  color: #0cce6b;
+}
+
+.score-num.score-needs-improvement {
+  color: #ffa400;
+}
+
+.score-num.score-poor {
+  color: #ff4e42;
+}
+
+.score-num.score-na {
+  color: #9ca3af;
 }
 
 .score-label {
@@ -228,6 +305,22 @@ body {
   border-radius: 12px;
 }
 
+.cat-score-pill.score-good {
+  background: #0cce6b;
+}
+
+.cat-score-pill.score-needs-improvement {
+  background: #ffa400;
+}
+
+.cat-score-pill.score-poor {
+  background: #ff4e42;
+}
+
+.cat-score-pill.score-na {
+  background: #9ca3af;
+}
+
 /* ── VITALS ── */
 .vitals-grid {
   display: grid;
@@ -238,9 +331,25 @@ body {
 .vital-card {
   text-align: center;
   padding: 16px 8px;
-  border: 2px solid var(--vc, #e2e8f0);
+  border: 2px solid #9ca3af;
   border-radius: 14px;
   background: #fafbff;
+}
+
+.vital-card.rating-good {
+  border-color: #0cce6b;
+}
+
+.vital-card.rating-needs-improvement {
+  border-color: #ffa400;
+}
+
+.vital-card.rating-poor {
+  border-color: #ff4e42;
+}
+
+.vital-card.rating-na {
+  border-color: #9ca3af;
 }
 
 .vital-ring {
@@ -248,10 +357,26 @@ body {
   height: 76px;
   margin: 0 auto 8px;
   border-radius: 50%;
-  border: 5px solid var(--vc, #9ca3af);
+  border: 5px solid #9ca3af;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.vital-card.rating-good .vital-ring {
+  border-color: #0cce6b;
+}
+
+.vital-card.rating-needs-improvement .vital-ring {
+  border-color: #ffa400;
+}
+
+.vital-card.rating-poor .vital-ring {
+  border-color: #ff4e42;
+}
+
+.vital-card.rating-na .vital-ring {
+  border-color: #9ca3af;
 }
 
 .vital-value {
@@ -276,6 +401,89 @@ body {
 .vital-rating {
   font-size: 11px;
   font-weight: 600;
+}
+
+.vital-rating.rating-good {
+  color: #0cce6b;
+}
+
+.vital-rating.rating-needs-improvement {
+  color: #ffa400;
+}
+
+.vital-rating.rating-poor {
+  color: #ff4e42;
+}
+
+.vital-rating.rating-na {
+  color: #9ca3af;
+}
+
+.audit-status-header {
+  width: 34px;
+}
+
+.audit-status-cell {
+  width: 34px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.audit-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.audit-status-badge.status-good {
+  background: #0cce6b;
+}
+
+.audit-status-badge.status-needs-improvement {
+  background: #ffa400;
+}
+
+.audit-status-badge.status-poor {
+  background: #ff4e42;
+}
+
+.audit-status-badge.status-info,
+.audit-status-badge.status-manual {
+  background: #64748b;
+}
+
+.audit-details-cell {
+  padding: 0 !important;
+}
+
+.audit-details {
+  padding: 0 12px 8px;
+}
+
+.audit-details-summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #64748b;
+  padding: 10px 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.audit-details-caret {
+  font-size: 10px;
+}
+
+.audit-details-table {
+  width: 100%;
+  border-collapse: collapse;
 }
 
 /* ── AUDIT TABLES ── */
@@ -336,6 +544,22 @@ body {
   line-height: 20px;
 }
 
+.score-badge.score-good {
+  background: #0cce6b;
+}
+
+.score-badge.score-needs-improvement {
+  background: #ffa400;
+}
+
+.score-badge.score-poor {
+  background: #ff4e42;
+}
+
+.score-badge.score-na {
+  background: #9ca3af;
+}
+
 /* ── NETWORK TABLE ── */
 .res-table {
   width: 100%;
@@ -378,6 +602,12 @@ body {
 .res-mime {
   color: #94a3b8;
   font-size: 11px;
+}
+
+.res-empty-message {
+  text-align: center;
+  color: #94a3b8;
+  padding: 20px;
 }
 
 .summary-bar {
@@ -438,6 +668,16 @@ body {
 
 .ai-suggestion-item::marker {
   color: #2563eb;
+}
+
+.empty-state-message {
+  color: #94a3b8;
+  text-align: center;
+  padding: 20px;
+}
+
+.empty-state-message.empty-state-message-lg {
+  padding: 40px;
 }
 
 .footer {

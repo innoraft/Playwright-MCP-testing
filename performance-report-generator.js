@@ -40,17 +40,18 @@ export class PerformanceReportGenerator {
     return 'poor';
   }
 
-  scoreColor(score) {
-    if (score >= 90) return '#0cce6b';
-    if (score >= 50) return '#ffa400';
-    return '#ff4e42';
+  getScoreClass(score) {
+    if (score === null || score === undefined || Number.isNaN(Number(score))) return 'score-na';
+    if (Number(score) >= 90) return 'score-good';
+    if (Number(score) >= 50) return 'score-needs-improvement';
+    return 'score-poor';
   }
 
-  ratingColor(rating) {
-    if (rating === 'good')              return '#0cce6b';
-    if (rating === 'needs-improvement') return '#ffa400';
-    if (rating === 'poor')              return '#ff4e42';
-    return '#9ca3af';
+  getRatingClass(rating) {
+    if (rating === 'good') return 'rating-good';
+    if (rating === 'needs-improvement') return 'rating-needs-improvement';
+    if (rating === 'poor') return 'rating-poor';
+    return 'rating-na';
   }
 
   ratingLabel(rating) {
@@ -116,14 +117,15 @@ export class PerformanceReportGenerator {
     const categoryScores = metrics.categoryScores || {};
     return categories.map(cat => {
       const score = categoryScores[cat] ?? null;
-      const color = score !== null ? this.scoreColor(score) : '#9ca3af';
       const meta  = CATEGORY_META[cat] || { label: cat, icon: '📊' };
-      const pct   = score ?? 0;
+      const pct   = score !== null ? Math.round(Math.max(0, Math.min(100, Number(score)))) : 0;
+      const fillClass = `score-fill-${Math.round(pct / 10) * 10}`;
+      const scoreClass = this.getScoreClass(score);
       return `
         <div class="score-card">
-          <div class="score-gauge" style="--sc:${color};--sv:${pct}">
+          <div class="score-gauge ${scoreClass} ${fillClass}">
             <div class="score-inner">
-              <div class="score-num" style="color:${color}">${score !== null ? score : '—'}</div>
+              <div class="score-num ${scoreClass}">${score !== null ? score : '—'}</div>
             </div>
           </div>
           <div class="score-label">${meta.icon} ${this.escapeHtml(meta.label)}</div>
@@ -143,14 +145,14 @@ export class PerformanceReportGenerator {
     ];
     const cards = coreVitals.map(v => {
       const rating = this.rateMetric(v.key, v.value);
-      const color  = this.ratingColor(rating);
+      const ratingClass = this.getRatingClass(rating);
       const disp   = v.key === 'cls' ? this.formatNumber(v.value) : this.formatSeconds(v.value);
       return `
-        <div class="vital-card" style="--vc:${color}">
+        <div class="vital-card ${ratingClass}">
           <div class="vital-ring"><div class="vital-value">${disp}</div></div>
           <div class="vital-label">${v.label}</div>
           <div class="vital-desc">${v.description}</div>
-          <div class="vital-rating" style="color:${color}">${this.ratingLabel(rating)}</div>
+          <div class="vital-rating ${ratingClass}">${this.ratingLabel(rating)}</div>
         </div>`;
     }).join('');
     return `
@@ -186,10 +188,10 @@ export class PerformanceReportGenerator {
     if (diagnostics.length === 0) return '';
     const rows = diagnostics.map(d => {
       const pct = Math.round((d.score ?? 0) * 100);
-      const col = this.scoreColor(pct);
+      const scoreClass = this.getScoreClass(pct);
       return `
       <tr>
-        <td><span class="score-badge" style="background:${col}">${pct}</span></td>
+        <td><span class="score-badge ${scoreClass}">${pct}</span></td>
         <td class="opp-title">${this.escapeHtml(d.title)}</td>
         <td class="opp-desc">${this.escapeHtml(d.displayValue)}</td>
       </tr>`;
@@ -226,7 +228,7 @@ export class PerformanceReportGenerator {
       </div>
       <table class="res-table">
         <thead><tr><th>#</th><th>URL</th><th>Duration</th><th>Transfer</th><th>MIME</th><th>Status</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:20px">No network data captured.</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="6" class="res-empty-message">No network data captured.</td></tr>'}</tbody>
       </table>
     </div>`;
   }
@@ -243,10 +245,10 @@ export class PerformanceReportGenerator {
     const audits = categoryAudits[cat] ?? [];
     const meta   = CATEGORY_META[cat] || { label: cat, icon: '📊' };
     const score  = categoryScores[cat] ?? null;
-    const sColor = score !== null ? this.scoreColor(score) : '#9ca3af';
+    const scoreClass = this.getScoreClass(score);
 
     if (audits.length === 0) {
-      return `<div class="card"><p style="color:#94a3b8;text-align:center;padding:20px">No audit data for ${this.escapeHtml(meta.label)}.</p></div>`;
+      return `<div class="card"><p class="empty-state-message">No audit data for ${this.escapeHtml(meta.label)}.</p></div>`;
     }
 
     const failed     = audits.filter(a => a.score !== null && a.score < 0.9);
@@ -254,21 +256,25 @@ export class PerformanceReportGenerator {
     const infoManual = audits.filter(a => a.score === null);
 
     const auditRow = (a) => {
-      let badge, bColor;
+      let badge;
+      let statusClass;
       if (a.score === null) {
         badge = a.scoreDisplayMode === 'manual' ? '🔍' : 'ℹ';
-        bColor = '#64748b';
+        statusClass = a.scoreDisplayMode === 'manual' ? 'status-manual' : 'status-info';
       } else if (a.score >= 0.9) {
-        badge = '✓'; bColor = '#0cce6b';
+        badge = '✓';
+        statusClass = 'status-good';
       } else if (a.score >= 0.5) {
-        badge = '▲'; bColor = '#ffa400';
+        badge = '▲';
+        statusClass = 'status-needs-improvement';
       } else {
-        badge = '✕'; bColor = '#ff4e42';
+        badge = '✕';
+        statusClass = 'status-poor';
       }
       return `
         <tr>
-          <td style="width:34px;text-align:center;vertical-align:middle">
-            <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:${bColor};color:#fff;font-size:11px;font-weight:700">${badge}</span>
+          <td class="audit-status-cell">
+            <span class="audit-status-badge ${statusClass}">${badge}</span>
           </td>
           <td class="opp-title">${this.escapeHtml(a.title)}</td>
           <td class="opp-desc">${this.escapeHtml(a.displayValue || '')}</td>
@@ -278,12 +284,12 @@ export class PerformanceReportGenerator {
     const failedRows  = [...failed, ...infoManual].map(auditRow).join('');
     const passedBlock = passed.length > 0 ? `
       <tr>
-        <td colspan="3" style="padding:0">
-          <details style="padding:0 12px 8px">
-            <summary style="cursor:pointer;font-size:13px;color:#64748b;padding:10px 0;list-style:none;display:flex;align-items:center;gap:6px">
-              <span style="font-size:10px">▶</span> ${passed.length} passed audit${passed.length !== 1 ? 's' : ''}
+        <td colspan="3" class="audit-details-cell">
+          <details class="audit-details">
+            <summary class="audit-details-summary">
+              <span class="audit-details-caret">▶</span> ${passed.length} passed audit${passed.length !== 1 ? 's' : ''}
             </summary>
-            <table style="width:100%;border-collapse:collapse"><tbody>${passed.map(auditRow).join('')}</tbody></table>
+            <table class="audit-details-table"><tbody>${passed.map(auditRow).join('')}</tbody></table>
           </details>
         </td>
       </tr>` : '';
@@ -291,11 +297,11 @@ export class PerformanceReportGenerator {
     return `
     <div class="card">
       <h2 class="card-title">${meta.icon} ${this.escapeHtml(meta.label)} Audits
-        <span class="cat-score-pill" style="background:${sColor}">${score !== null ? score : '—'}</span>
+        <span class="cat-score-pill ${scoreClass}">${score !== null ? score : '—'}</span>
       </h2>
       <p class="section-subtitle">${failed.length} issue${failed.length !== 1 ? 's' : ''} · ${passed.length} passed · ${infoManual.length} informational</p>
       <table class="audit-table">
-        <thead><tr><th style="width:34px"></th><th>Audit</th><th>Value</th></tr></thead>
+        <thead><tr><th class="audit-status-header"></th><th>Audit</th><th>Value</th></tr></thead>
         <tbody>${failedRows}${passedBlock}</tbody>
       </table>
     </div>`;
@@ -409,10 +415,10 @@ export class PerformanceReportGenerator {
 
     const mobilePanel  = hasMobile
       ? this._buildDevicePanel('mobile',  mobileMetrics,  selectedCats, aiSuggestions)
-      : '<p style="color:#94a3b8;text-align:center;padding:40px">Mobile audit data not available.</p>';
+      : '<p class="empty-state-message empty-state-message-lg">Mobile audit data not available.</p>';
     const desktopPanel = hasDesktop
       ? this._buildDevicePanel('desktop', desktopMetrics, selectedCats, aiSuggestions)
-      : '<p style="color:#94a3b8;text-align:center;padding:40px">Desktop audit data not available.</p>';
+      : '<p class="empty-state-message empty-state-message-lg">Desktop audit data not available.</p>';
 
     const catLabels = selectedCats
       .map(c => ({ performance: 'Performance', accessibility: 'Accessibility', 'best-practices': 'Best Practices', seo: 'SEO' }[c] || c))
