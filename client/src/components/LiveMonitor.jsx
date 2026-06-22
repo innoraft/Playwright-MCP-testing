@@ -6,8 +6,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
  * Props:
  *  - frame: base64 JPEG string (latest screencast frame)
  *  - isRunning: whether a test is currently executing
+ *  - isPerformanceTest: whether the current run is a performance/Lighthouse test
  */
-export default function LiveMonitor({ frame, isRunning }) {
+export default function LiveMonitor({ frame, isRunning, isPerformanceTest }) {
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef(null);
@@ -40,15 +41,15 @@ export default function LiveMonitor({ frame, isRunning }) {
         </button>
 
         <span className="live-monitor-title">
-          <span className={`live-monitor-dot ${isRunning && frame ? 'live' : ''}`} />
+          <span className={`live-monitor-dot ${isRunning && frame && !isPerformanceTest ? 'live' : ''}`} />
           Live Browser Monitor
         </span>
 
-        {isRunning && frame && (
+        {isRunning && frame && !isPerformanceTest && (
           <span className="live-monitor-badge">LIVE</span>
         )}
 
-        {expanded && frame && (
+        {expanded && frame && !isPerformanceTest && (
           <button
             className="live-monitor-fullscreen-btn"
             onClick={handleFullscreen}
@@ -62,7 +63,12 @@ export default function LiveMonitor({ frame, isRunning }) {
       {/* Frame viewport */}
       {expanded && (
         <div className="live-monitor-viewport">
-          {frame ? (
+          {isPerformanceTest && isRunning ? (
+            <div className="live-monitor-placeholder">
+              <span className="live-monitor-placeholder-icon">📊</span>
+              <span>No live display available for performance metrics test</span>
+            </div>
+          ) : frame ? (
             <img
               className="live-monitor-frame"
               src={`data:image/jpeg;base64,${frame}`}

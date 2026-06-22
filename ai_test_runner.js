@@ -25,6 +25,9 @@ import { CDPService } from './src/cdp/cdp.service.js';
 import { buildStaticSystemPrompt } from './src/prompts/system.prompt.js';
 import { buildPlanningUserMessage, buildReplanUserMessage } from './src/prompts/step.prompt.js';
 import { compressSnapshot } from './src/resolver/snapshot-parser.js';
+import { PerformanceReportGenerator } from './performance-report-generator.js';
+import { runLighthouseAudit } from './src/perf/lighthouse-runner.js';
+import { buildPerfSuggestionsSystemPrompt, buildPerfSuggestionsUserMessage } from './src/prompts/perf-ai-suggestions.prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +58,63 @@ const log = {
   tool: (name, args) => console.log(`🔧 Tool: ${name}(${JSON.stringify(args).substring(0, 120)}...)`),
   llm: (msg) => console.log(`🤖 LLM: ${msg}`)
 };
+
+// ---------- PERFORMANCE HELPERS ----------
+
+/**
+ * Detects if a test file is a performance test.
+ */
+function isPerformanceTest(testText) {
+  const trimmed = testText.trimStart().toLowerCase();
+  return trimmed.startsWith('schemaversion:') || /^\s*performance\s*:/m.test(testText);
+}
+
+/**
+ * Parses a performance YAML and returns the minimal config needed to run Lighthouse.
+ * Supports both the new simple format (target.url + target.formFactor) and
+ * older formats (url: key, or URL regex fallback).
+ */
+function parsePerformanceConfig(testText) {
+  const testName = (testText.match(/^performance:\s*(.+)$/m)?.[1] || 'performance-test').trim();
+
+  // Parse categories — no PWA
+  const VALID_CATS = new Set(['performance', 'accessibility', 'best-practices', 'seo']);
+  let categories = ['performance'];
+
+  const blockMatch = testText.match(/^\s*categories\s*:\s*\n((?:[ \t]*-[ \t]+\S+[ \t]*\n?)+)/m);
+  if (blockMatch) {
+    const parsed = [...blockMatch[1].matchAll(/[ \t]*-[ \t]+(\S+)/g)]
+      .map(m => m[1].toLowerCase())
+      .filter(c => VALID_CATS.has(c));
+    if (parsed.length > 0) categories = parsed;
+  } else {
+    const inlineMatch = testText.match(/^\s*categories\s*:\s*([^\n]+)$/m);
+    if (inlineMatch) {
+      const parsed = inlineMatch[1].split(',')
+        .map(c => c.trim().toLowerCase())
+        .filter(c => VALID_CATS.has(c));
+      if (parsed.length > 0) categories = parsed;
+    }
+  }
+
+  // Parse multiple URLs from targets: block (new format)
+  let urls = [];
+  const targetsBlock = testText.match(/^\s*targets\s*:\s*\n((?:[ \t]*-[ \t]+\S+[ \t]*\n?)+)/m);
+  if (targetsBlock) {
+    urls = [...targetsBlock[1].matchAll(/[ \t]*-[ \t]+(\S+)/g)]
+      .map(m => m[1].trim())
+      .filter(u => /^https?:\/\/.+/.test(u));
+  }
+
+  // Fallback: old single-URL format (target.url or bare URL)
+  if (urls.length === 0) {
+    const singleUrl = (testText.match(/^\s*url:\s*(.+)$/m)?.[1] || '').trim()
+                   || (testText.match(/https?:\/\/[^\s"'<>]+/i)?.[0] || '');
+    if (singleUrl) urls = [singleUrl];
+  }
+
+  return { testName, urls, categories };
+}
 
 // ---------- STATELESS RUNNER ----------
 class StatelessMCPRunner {
@@ -212,6 +272,162 @@ class StatelessMCPRunner {
   }
 
   /**
+   * Resolves the Chromium executable path using multiple fallback strategies.
+   * @returns {Promise<string>} Absolute path to Chromium binary
+   */
+  async _findChromiumPath() {
+    let chromiumPath;
+
+    // 1. Try playwright-core's reported path
+    try {
+      const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8' }).trim();
+      if (reported && fs.existsSync(reported)) chromiumPath = reported;
+    } catch { /* ignore */ }
+
+    // 2. Scan ms-playwright cache for any installed chromium
+    if (!chromiumPath) {
+      const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
+      try {
+        const dirs = fs.readdirSync(cacheDir)
+          .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
+          .sort().reverse();
+        for (const dir of dirs) {
+
+          const candidates = [
+            path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
+            path.join(cacheDir, dir, 'chrome-linux', 'chrome')
+          ];
+          const found = candidates.find(p => fs.existsSync(p));
+          if (found) { chromiumPath = found; break; }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 3. Fallback to system-installed chromium
+    if (!chromiumPath) {
+      const fallbacks = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
+      chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
+    }
+
+    if (!chromiumPath || !fs.existsSync(chromiumPath)) {
+      throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
+    }
+    return chromiumPath;
+  }
+
+  /**
+   * Collects negative audits from both mobile + desktop, calls the LLM for
+   * brief pointwise fix suggestions, and returns them keyed by category.
+   * Non-fatal — returns {} on any error.
+   */
+  async _generateAISuggestions(mobileMetrics, desktopMetrics, categories) {
+    const VALID_CATS = ['performance', 'accessibility', 'best-practices', 'seo'];
+    const negativeAudits = {};
+
+    for (const cat of categories.filter(c => VALID_CATS.includes(c))) {
+      const mAudits = (mobileMetrics.categoryAudits?.[cat] || [])
+        .filter(a => a.score !== null && a.score < 0.9);
+      const dAudits = (desktopMetrics.categoryAudits?.[cat] || [])
+        .filter(a => a.score !== null && a.score < 0.9);
+
+      // Union by audit id so we don't duplicate
+      const auditMap = new Map();
+      [...mAudits, ...dAudits].forEach(a => auditMap.set(a.id, a));
+      const unique = Array.from(auditMap.values());
+
+      if (unique.length > 0) {
+        negativeAudits[cat] = unique.slice(0, 8); // max 8 per category
+      }
+    }
+
+    if (Object.keys(negativeAudits).length === 0) return {};
+    try {
+      log.info('🤖 Generating AI fix suggestions...');
+      const { text } = await generateText({
+        model: this.llm,
+        messages: [
+          { role: 'system', content: buildPerfSuggestionsSystemPrompt() },
+          { role: 'user',   content: buildPerfSuggestionsUserMessage(negativeAudits) },
+        ],
+      });
+
+      const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const suggestions = JSON.parse(jsonText);
+      log.success('AI suggestions ready');
+      return suggestions;
+    } catch (err) {
+      log.warn(`AI suggestions skipped (non-fatal): ${err.message}`);
+      return {};
+    }
+  }
+
+  /**
+   * Runs Lighthouse audits for every target URL, once on Mobile and once on
+   * Desktop. Generates AI fix suggestions from failing audits, then produces
+   * a separate HTML report per URL.
+   *
+   * @param {string} testText - Raw YAML content of the performance test
+   * @param {string} testName - File basename used for logging
+   */
+  async runPerformanceAudit(testText, testName) {
+    const perfConfig  = parsePerformanceConfig(testText);
+    const logicalName = perfConfig.testName || testName;
+
+    if (perfConfig.urls.length === 0) {
+      throw new Error('Performance test YAML is missing target URL(s).');
+    }
+
+    // Signal to the server/UI that this is a performance test (no CDP screencast)
+    console.log('__PERF_TEST__');
+
+    log.info(`🚀 Performance suite: ${logicalName}`);
+    log.info(`🔗 URLs (${perfConfig.urls.length}): ${perfConfig.urls.join(', ')}`);
+    log.info(`📊 Categories: ${perfConfig.categories.join(', ')}`);
+
+    const chromiumPath = await this._findChromiumPath();
+    log.info(`Using Chromium at: ${chromiumPath}`);
+
+    const perfReportGen = new PerformanceReportGenerator({ outputDir: config.reporting.outputDir });
+    const perfDir = path.resolve('files/perf');
+    fs.mkdirSync(perfDir, { recursive: true });
+
+    for (const targetUrl of perfConfig.urls) {
+      log.info(`\n--- Auditing: ${targetUrl} ---`);
+
+      log.info('📱 Running Mobile Lighthouse...');
+      const { metrics: mobileMetrics } = await runLighthouseAudit(
+        targetUrl, chromiumPath, 'mobile', perfConfig.categories
+      );
+      log.success(`Mobile done — Performance: ${mobileMetrics.performanceScore}`);
+
+      log.info('💻 Running Desktop Lighthouse...');
+      const { metrics: desktopMetrics } = await runLighthouseAudit(
+        targetUrl, chromiumPath, 'desktop', perfConfig.categories
+      );
+      log.success(`Desktop done — Performance: ${desktopMetrics.performanceScore}`);
+
+      // AI suggestions (non-fatal)
+      const aiSuggestions = await this._generateAISuggestions(
+        mobileMetrics, desktopMetrics, perfConfig.categories
+      );
+
+      // Generate report for this URL
+      const { htmlReport } = perfReportGen.generateReport({
+        testName:       logicalName,
+        targetUrl,
+        generatedAt:    Date.now(),
+        categories:     perfConfig.categories,
+        mobileMetrics,
+        desktopMetrics,
+        aiSuggestions,
+      });
+
+      log.success(`📊 Report saved: ${htmlReport}`);
+      console.log(`__REPORT_FILE__${path.basename(htmlReport)}`);
+    }
+  }
+
+  /**
    * Initializes the MCP client connection and discovers available tools.
    * Also ensures screenshot output directories exist.
    *
@@ -229,44 +445,7 @@ class StatelessMCPRunner {
     fs.mkdirSync(screenshotsDir, { recursive: true });
     fs.mkdirSync(uploadsDir, { recursive: true });
 
-    // Resolve Chromium executable path dynamically
-    let chromiumPath;
-
-    // 1. Try playwright-core's reported path
-    try {
-      const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8' }).trim();
-      if (reported && fs.existsSync(reported)) chromiumPath = reported;
-    } catch { /* ignore */ }
-
-    // 2. Scan ms-playwright cache for any installed chromium
-    if (!chromiumPath) {
-      const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
-      try {
-        const dirs = fs.readdirSync(cacheDir)
-          .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
-          .sort()
-          .reverse(); // newest first
-        for (const dir of dirs) {
-          // Newer Playwright uses chrome-linux64, older uses chrome-linux
-          const candidates = [
-            path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
-            path.join(cacheDir, dir, 'chrome-linux', 'chrome'),
-          ];
-          const found = candidates.find(p => fs.existsSync(p));
-          if (found) { chromiumPath = found; break; }
-        }
-      } catch { /* ignore */ }
-    }
-
-    // 3. Fallback to system-installed chromium
-    if (!chromiumPath) {
-      const fallbacks = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-      chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
-    }
-
-    if (!chromiumPath || !fs.existsSync(chromiumPath)) {
-      throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
-    }
+    const chromiumPath = await this._findChromiumPath();
     log.info(`Using Chromium at: ${chromiumPath}`);
 
     // Launch Chromium with CDP and connect MCP to it
@@ -511,7 +690,7 @@ class StatelessMCPRunner {
     log.llm(`Chosen Model -> ${config.llm.model} `);
     log.llm('Generating execution plan...');
 
-    // Rebuild system prompt for VR mode if needed (filters tools)
+    // Rebuild system prompt based on test type
     const systemPrompt = isVisualRegression
       ? buildStaticSystemPrompt(this.mcpTools, true)
       : this.systemPrompt;
@@ -570,19 +749,6 @@ class StatelessMCPRunner {
       throw new Error(`Invalid plan JSON: ${err.message}`);
     }
   }
-
-  /**
-   * Executes a full test from planning through reporting.
-   *
-   * @param {string} testText - Full test file content
-   * @param {string} testName - Test name
-   * @returns {Promise<Object>} Final test results
-   * @throws {Error} If test fails
-   */
-  // Tools that cause a page navigation (DOM becomes stale after these)
-  static NAVIGATION_TOOLS = new Set([
-    'browser_navigate', 'browser_navigate_back'
-  ]);
 
   /**
    * Executes a single planned step (VR or MCP tool).
@@ -724,7 +890,7 @@ class StatelessMCPRunner {
     log.info(`🧪 Starting test: ${testName} (logical name: ${logicalName})`);
 
     this.testReport = {
-      testName: logicalName, testText,
+      testName: logicalName, testText: testText,
       startTime: new Date(), endTime: null,
       actions: [], passedActions: 0, failedActions: 0,
       totalActions: 0, testResult: 'running'
@@ -1033,22 +1199,28 @@ async function main() {
     const runner = new StatelessMCPRunner();
     activeRunner = runner;
 
+    const testText = fs.readFileSync(testFile, 'utf8');
+
     try {
-      await runner.initializeMCP();
-      const result = await runner.runTest(
-        fs.readFileSync(testFile, 'utf8'),
-        testName
-      );
-
-      allResults.push({
-        testName,
-        status: 'PASSED',
-        passed: result.passed,
-        failed: result.failed
-      });
-
-      totalPassed++;
-      log.success(`✅ Test PASSED: ${testName}\n`);
+      if (isPerformanceTest(testText)) {
+        // Lighthouse path
+        await runner.runPerformanceAudit(testText, testName);
+        allResults.push({ testName, status: 'PASSED', passed: 1, failed: 0 });
+        totalPassed++;
+        log.success(`✅ Test PASSED: ${testName}\n`);
+      } else {
+        // Standard LLM-driven path
+        await runner.initializeMCP();
+        const result = await runner.runTest(testText, testName);
+        allResults.push({
+          testName,
+          status: 'PASSED',
+          passed: result.passed,
+          failed: result.failed
+        });
+        totalPassed++;
+        log.success(`✅ Test PASSED: ${testName}\n`);
+      }
 
     } catch (err) {
       allResults.push({

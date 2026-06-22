@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
+import PerformanceMetricsForm from '../components/PerformanceMetricsForm';
 import AdvancedEditor from '../components/AdvancedEditor';
 import { useAuth } from '../hooks/useAuth';
 
 const TABS = [
   { id: 'general', label: 'General Test', icon: '📋' },
   { id: 'visual', label: 'Visual Regression', icon: '🖼️' },
+  { id: 'performance', label: 'Performance Metrics', icon: '⚡' },
   { id: 'editor', label: 'Test Editor', icon: '⌨️' },
 ];
 
@@ -23,7 +25,15 @@ export default function TestSuites() {
   // Form data for editing
   const [generalData, setGeneralData] = useState(null);
   const [vrData, setVrData] = useState(null);
+  const [performanceData, setPerformanceData] = useState(null);
   const [editorContent, setEditorContent] = useState('');
+
+  const detectTestType = (content = '') => {
+    const trimmed = content.trimStart().toLowerCase();
+    if (trimmed.startsWith('schemaversion:') || /(^|\n)\s*performance\s*:/i.test(content)) return 'performance';
+    if (trimmed.startsWith('name:')) return 'visual-regression';
+    return 'general';
+  };
 
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
@@ -75,6 +85,45 @@ export default function TestSuites() {
       if (breakpoints.length === 0) breakpoints.push({ width: 1280, height: 720 });
 
       return { testName, url, breakpoints };
+    } else if (type === 'performance') {
+      const perfMatch = content.match(/^performance:\s*(.+)$/m);
+
+      // Parse categories block (no PWA)
+      const VALID_CATS = new Set(['performance', 'accessibility', 'best-practices', 'seo']);
+      let categories = ['performance'];
+      const catsBlockMatch = content.match(/^\s*categories\s*:\s*\n((?:[ \t]*-[ \t]+\S+[ \t]*\n?)+)/m);
+      if (catsBlockMatch) {
+        const parsed = [...catsBlockMatch[1].matchAll(/[ \t]*-[ \t]+(\S+)/g)]
+          .map((m) => m[1].toLowerCase())
+          .filter((c) => VALID_CATS.has(c));
+        if (parsed.length > 0) categories = parsed;
+      } else {
+        const inlineMatch = content.match(/^\s*categories\s*:\s*([^\n]+)$/m);
+        if (inlineMatch) {
+          const parsed = inlineMatch[1].split(',').map((c) => c.trim().toLowerCase()).filter((c) => VALID_CATS.has(c));
+          if (parsed.length > 0) categories = parsed;
+        }
+      }
+
+      // Parse multiple URLs from targets: block (new format)
+      let urls = [];
+      const targetsBlock = content.match(/^\s*targets\s*:\s*\n((?:[ \t]*-[ \t]+\S+[ \t]*\n?)+)/m);
+      if (targetsBlock) {
+        urls = [...targetsBlock[1].matchAll(/[ \t]*-[ \t]+(\S+)/g)]
+          .map((m) => m[1].trim())
+          .filter((u) => /^https?:\/\/.+/.test(u));
+      }
+      // Fallback: old single url: field
+      if (urls.length === 0) {
+        const urlMatch = content.match(/^\s*url:\s*(.+)$/m);
+        if (urlMatch) urls = [urlMatch[1].trim()];
+      }
+
+      return {
+        testName:   perfMatch ? perfMatch[1].trim() : '',
+        urls:       urls.length > 0 ? urls : [''],
+        categories,
+      };
     } else {
       // Parse general test YAML
       const lines = content.split('\n');
@@ -127,6 +176,10 @@ export default function TestSuites() {
         const parsed = parseTestContent(test.name, data.content, 'visual-regression');
         setVrData(parsed);
         setActiveTab('visual');
+      } else if (test.type === 'performance') {
+        const parsed = parseTestContent(test.name, data.content, 'performance');
+        setPerformanceData(parsed);
+        setActiveTab('performance');
       } else {
         const parsed = parseTestContent(test.name, data.content, 'general');
         setGeneralData(parsed);
@@ -145,6 +198,7 @@ export default function TestSuites() {
     setSelectedTest(null);
     setGeneralData(null);
     setVrData(null);
+    setPerformanceData(null);
     setEditorContent('');
   };
 
@@ -167,7 +221,7 @@ export default function TestSuites() {
       await fetchTests();
 
       // Select the newly saved test
-      setSelectedTest({ name: result.fileName, type: content.startsWith('name:') ? 'visual-regression' : 'general' });
+      setSelectedTest({ name: result.fileName, type: detectTestType(content) });
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -272,7 +326,7 @@ export default function TestSuites() {
                 >
                   <div className="test-list-item-info">
                     <span className="test-list-item-icon">
-                      {test.type === 'visual-regression' ? '🖼️' : '📋'}
+                      {test.type === 'visual-regression' ? '🖼️' : test.type === 'performance' ? '⚡' : '📋'}
                     </span>
                     <span className="test-list-item-name" title={test.name}>
                       {test.name.replace('.test.yml', '')}
@@ -334,6 +388,15 @@ export default function TestSuites() {
               <AdvancedEditor
                 key={selectedTest?.name || 'new-editor'}
                 initialContent={editorContent}
+                onSave={handleSave}
+                saving={saving}
+              />
+            )}
+
+            {activeTab === 'performance' && (
+              <PerformanceMetricsForm
+                key={selectedTest?.name || 'new-performance'}
+                initialData={performanceData}
                 onSave={handleSave}
                 saving={saving}
               />

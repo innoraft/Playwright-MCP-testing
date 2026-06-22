@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
@@ -48,6 +48,8 @@ export default function FileBrowser() {
   const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const prevBlobUrl = useRef(null);
   const [toast, setToast] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,23 +91,50 @@ export default function FileBrowser() {
   const navigateToFolder = useCallback((folderPath) => {
     setSelectedFile(null);
     setPreviewUrl(null);
+    if (prevBlobUrl.current) {
+      URL.revokeObjectURL(prevBlobUrl.current);
+      prevBlobUrl.current = null;
+    }
     fetchDirectory(folderPath);
   }, [fetchDirectory]);
 
+  // ── Revoke old blob URL helper ────────────────────────
+  const clearBlobUrl = useCallback(() => {
+    if (prevBlobUrl.current) {
+      URL.revokeObjectURL(prevBlobUrl.current);
+      prevBlobUrl.current = null;
+    }
+  }, []);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => () => clearBlobUrl(), [clearBlobUrl]);
+
   // ── Select a file for preview ─────────────────────────
-  const selectFile = useCallback((item) => {
+  const selectFile = useCallback(async (item) => {
     if (item.type === 'folder') {
       navigateToFolder(item.path);
       return;
     }
     setSelectedFile(item);
+    clearBlobUrl();
+    setPreviewUrl(null);
     const isImage = IMAGE_EXTENSIONS.includes(item.extension);
     if (isImage) {
-      setPreviewUrl(`/api/files/preview/${item.path}`);
-    } else {
-      setPreviewUrl(null);
+      setPreviewLoading(true);
+      try {
+        const res = await authFetch(`/api/files/preview/${item.path}`);
+        if (!res.ok) throw new Error('Preview failed');
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        prevBlobUrl.current = objectUrl;
+        setPreviewUrl(objectUrl);
+      } catch {
+        setPreviewUrl(null);
+      } finally {
+        setPreviewLoading(false);
+      }
     }
-  }, [navigateToFolder]);
+  }, [navigateToFolder, authFetch, clearBlobUrl]);
 
   // ── Delete file ───────────────────────────────────────
   const deleteFile = useCallback(async (filePath) => {
@@ -125,6 +154,23 @@ export default function FileBrowser() {
       setDeleteConfirm(null);
     }
   }, [currentPath, fetchDirectory, selectedFile, showToast]);
+
+  // ── Download file (requires auth header) ──────────────
+  const downloadFile = useCallback(async (file) => {
+    try {
+      const res = await authFetch(`/api/files/preview/${file.path}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast('Could not download file', 'error');
+    }
+  }, [authFetch, showToast]);
 
   // ── Filtered items ────────────────────────────────────
   const filteredItems = useMemo(() => {
@@ -278,14 +324,13 @@ export default function FileBrowser() {
                   </div>
                 </div>
                 <div className="fb-preview-actions">
-                  <a
+                  <button
                     className="btn btn-secondary btn-sm"
-                    href={`/api/files/preview/${selectedFile.path}`}
-                    download={selectedFile.name}
+                    onClick={() => downloadFile(selectedFile)}
                     title="Download"
                   >
                     ⬇️ Download
-                  </a>
+                  </button>
                   <button
                     className="btn btn-danger btn-sm"
                     onClick={() => setDeleteConfirm(selectedFile)}
@@ -295,7 +340,12 @@ export default function FileBrowser() {
                 </div>
               </div>
               <div className="fb-preview-body">
-                {previewUrl && IMAGE_EXTENSIONS.includes(selectedFile.extension) ? (
+                {previewLoading ? (
+                  <div className="fb-preview-fallback">
+                    <div className="fb-preview-fallback-icon">⏳</div>
+                    <p>Loading preview...</p>
+                  </div>
+                ) : previewUrl && IMAGE_EXTENSIONS.includes(selectedFile.extension) ? (
                   <div className="fb-image-preview">
                     <img
                       src={previewUrl}
@@ -308,13 +358,12 @@ export default function FileBrowser() {
                     <div className="fb-preview-fallback-icon">{getFileIcon(selectedFile)}</div>
                     <h3>{selectedFile.name}</h3>
                     <p>Preview not available for .{selectedFile.extension} files</p>
-                    <a
+                    <button
                       className="btn btn-primary btn-sm"
-                      href={`/api/files/preview/${selectedFile.path}`}
-                      download={selectedFile.name}
+                      onClick={() => downloadFile(selectedFile)}
                     >
                       ⬇️ Download File
-                    </a>
+                    </button>
                   </div>
                 )}
               </div>
