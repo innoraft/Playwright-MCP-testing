@@ -2,14 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
 import PerformanceMetricsForm from '../components/PerformanceMetricsForm';
-import AdvancedEditor from '../components/AdvancedEditor';
 import { useAuth } from '../hooks/useAuth';
 
 const TABS = [
   { id: 'general', label: 'General Test', icon: '📋' },
   { id: 'visual', label: 'Visual Regression', icon: '🖼️' },
   { id: 'performance', label: 'Performance Metrics', icon: '⚡' },
-  { id: 'editor', label: 'Test Editor', icon: '⌨️' },
 ];
 
 export default function TestSuites() {
@@ -26,11 +24,11 @@ export default function TestSuites() {
   const [generalData, setGeneralData] = useState(null);
   const [vrData, setVrData] = useState(null);
   const [performanceData, setPerformanceData] = useState(null);
-  const [editorContent, setEditorContent] = useState('');
 
   const detectTestType = (content = '') => {
     const trimmed = content.trimStart().toLowerCase();
     if (trimmed.startsWith('schemaversion:') || /(^|\n)\s*performance\s*:/i.test(content)) return 'performance';
+    if (/(^|\n)\s*tests\s*:/i.test(content)) return 'general';
     if (trimmed.startsWith('name:')) return 'visual-regression';
     return 'general';
   };
@@ -47,7 +45,7 @@ export default function TestSuites() {
       const res = await authFetch('/api/tests');
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
-      setTests(data);
+      setTests((Array.isArray(data) ? data : []).filter(t => t.type !== 'form-validation'));
     } catch {
       showToast('Could not load test files', 'error');
     } finally {
@@ -125,7 +123,72 @@ export default function TestSuites() {
         categories,
       };
     } else {
-      // Parse general test YAML
+      // Parse general test YAML (new structured format + old fallback)
+      const unquote = (value = '') => {
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+          return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+        }
+        return trimmed;
+      };
+
+      if (/(^|\n)\s*tests\s*:/i.test(content)) {
+        const lines = content.split('\n');
+        const parsedName = (content.match(/^\s*name:\s*(.+)$/m)?.[1] || '').trim();
+        const parsedDescription = (content.match(/^\s*description:\s*(.+)$/m)?.[1] || '').trim();
+        const parsedBaseUrl = (content.match(/^\s*baseUrl:\s*(.+)$/m)?.[1] || '').trim();
+
+        const groups = [];
+        let inTests = false;
+        let currentGroup = null;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+
+          if (/^tests\s*:\s*$/i.test(trimmed)) {
+            inTests = true;
+            continue;
+          }
+
+          if (!inTests) continue;
+
+          const caseMatch = line.match(/^\s*-\s+name:\s*(.+)$/);
+          if (caseMatch) {
+            if (currentGroup) groups.push(currentGroup);
+            currentGroup = {
+              scenario: unquote(caseMatch[1]),
+              description: '',
+              steps: '',
+            };
+            continue;
+          }
+
+          if (!currentGroup) continue;
+
+          const descMatch = line.match(/^\s+description:\s*(.+)$/);
+          if (descMatch) {
+            currentGroup.description = unquote(descMatch[1]);
+            continue;
+          }
+
+          const stepMatch = line.match(/^\s+-\s+(.+)$/);
+          if (stepMatch && /^\s{4,}-\s+/.test(line)) {
+            currentGroup.steps = currentGroup.steps
+              ? `${currentGroup.steps}\n${unquote(stepMatch[1])}`
+              : unquote(stepMatch[1]);
+          }
+        }
+
+        if (currentGroup) groups.push(currentGroup);
+
+        return {
+          testName: unquote(parsedName) || name.replace('.test.yml', ''),
+          suiteDescription: unquote(parsedDescription),
+          baseUrl: unquote(parsedBaseUrl),
+          groups: groups.length > 0 ? groups : [{ scenario: '', description: '', steps: '' }],
+        };
+      }
+
       const lines = content.split('\n');
       const testName = lines[0]?.replace(/^Test:\s*/, '').trim() || '';
       const groups = [];
@@ -135,10 +198,10 @@ export default function TestSuites() {
       lines.forEach(line => {
         const trimmed = line.trim();
         if (trimmed.startsWith('# ')) {
-          // If we have pending steps, save the current group
           if (currentScenario || currentSteps.length > 0) {
             groups.push({
               scenario: currentScenario,
+              description: '',
               steps: currentSteps.join('\n'),
             });
           }
@@ -149,17 +212,17 @@ export default function TestSuites() {
         }
       });
 
-      // Push last group
       if (currentScenario || currentSteps.length > 0) {
         groups.push({
           scenario: currentScenario,
+          description: '',
           steps: currentSteps.join('\n'),
         });
       }
 
-      if (groups.length === 0) groups.push({ scenario: '', steps: '' });
+      if (groups.length === 0) groups.push({ scenario: '', description: '', steps: '' });
 
-      return { testName, groups };
+      return { testName, suiteDescription: '', baseUrl: '', groups };
     }
   };
 
@@ -185,9 +248,6 @@ export default function TestSuites() {
         setGeneralData(parsed);
         setActiveTab('general');
       }
-
-      // Also set raw content for advanced editor
-      setEditorContent(data.content);
     } catch {
       showToast('Failed to load test file', 'error');
     }
@@ -199,7 +259,6 @@ export default function TestSuites() {
     setGeneralData(null);
     setVrData(null);
     setPerformanceData(null);
-    setEditorContent('');
   };
 
   // ── Save handler (shared by all forms) ────────────────
@@ -379,15 +438,6 @@ export default function TestSuites() {
               <VisualRegressionForm
                 key={selectedTest?.name || 'new-visual'}
                 initialData={vrData}
-                onSave={handleSave}
-                saving={saving}
-              />
-            )}
-
-            {activeTab === 'editor' && (
-              <AdvancedEditor
-                key={selectedTest?.name || 'new-editor'}
-                initialContent={editorContent}
                 onSave={handleSave}
                 saving={saving}
               />

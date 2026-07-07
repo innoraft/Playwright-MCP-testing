@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { execSync } from 'child_process';
 import multer from 'multer';
 import {
   initializeAuth,
@@ -37,13 +38,69 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const FILES_DIR = path.join(PROJECT_ROOT, 'files');
 const BASELINES_DIR = path.join(FILES_DIR, 'baselines');
 
+function findChromiumPath() {
+  let chromiumPath;
+
+  try {
+    const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'ignore']
+    }).trim();
+    if (reported && fs.existsSync(reported)) chromiumPath = reported;
+  } catch { /* ignore */ }
+
+  if (!chromiumPath) {
+    const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
+    try {
+      const dirs = fs.readdirSync(cacheDir)
+        .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
+        .sort()
+        .reverse();
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
+          path.join(cacheDir, dir, 'chrome-linux', 'chrome')
+        ];
+        const found = candidates.find(p => fs.existsSync(p));
+        if (found) {
+          chromiumPath = found;
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!chromiumPath) {
+    const fallbacks = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/snap/bin/chromium'
+    ];
+    chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
+  }
+
+  if (!chromiumPath || !fs.existsSync(chromiumPath)) {
+    throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
+  }
+
+  return chromiumPath;
+}
+
 function detectTestType(content = '') {
   const trimmed = content.trimStart().toLowerCase();
   if (trimmed.startsWith('schemaversion:') || /(^|\n)\s*performance\s*:/i.test(content)) {
     return 'performance';
   }
+  if (/(^|\n)\s*tests\s*:/i.test(content)) {
+    return 'general';
+  }
   if (trimmed.startsWith('name:')) {
     return 'visual-regression';
+  }
+  if (/(^|\n)\s*form-validation\s*:/i.test(content)) {
+    return 'form-validation';
   }
   return 'general';
 }
@@ -573,6 +630,104 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
   }
 });
 
+// ── POST /api/forms/detect ─────────────────────────────────
+// Launch a headless browser, navigate to the given URL, and
+// return all detected forms + their input fields.
+app.post('/api/forms/detect', requireAuth, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || !/^https?:\/\/.+/.test(url)) {
+    return res.status(400).json({ error: 'Valid URL is required' });
+  }
+
+  let browser;
+  try {
+    const chromiumPath = findChromiumPath();
+    const { chromium } = await import('playwright-core');
+    browser = await chromium.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    const forms = await page.evaluate(() => {
+      const result = [];
+      const formEls = document.querySelectorAll('form');
+      const processForm = (formEl, idx) => {
+        const selectorStr = formEl.id
+          ? `#${formEl.id}`
+          : formEl.className
+            ? `.${formEl.className.trim().split(/\s+/).join('.')}`
+            : `form:nth-of-type(${idx + 1})`;
+
+        const fields = [];
+        const inputs = formEl.querySelectorAll('input, textarea, select');
+        inputs.forEach(el => {
+          const tag = el.tagName.toLowerCase();
+          const type = el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'text');
+          const name = el.getAttribute('name') || el.getAttribute('id') || el.getAttribute('placeholder') || '';
+          const fieldSel = el.id
+            ? `#${el.id}`
+            : el.name
+              ? `[name="${el.name}"]`
+              : null;
+          if (!name) return;
+          let fieldType = 'text';
+          if (tag === 'textarea') fieldType = 'textarea';
+          else if (tag === 'select') fieldType = el.multiple ? 'multiselect' : 'select';
+          else if (type === 'checkbox') fieldType = 'checkbox';
+          else if (type === 'radio') fieldType = 'radio';
+          else if (type === 'email') fieldType = 'email';
+          else if (type === 'password') fieldType = 'password';
+          else if (type === 'number') fieldType = 'number';
+          fields.push({ name, selector: fieldSel, type: fieldType });
+        });
+
+        // Find submit button
+        const submitBtn = formEl.querySelector('[type="submit"], button:not([type="button"])');
+        const submitSel = submitBtn
+          ? (submitBtn.id ? `#${submitBtn.id}` : submitBtn.getAttribute('type') === 'submit' ? '[type="submit"]' : 'button')
+          : null;
+
+        if (fields.length > 0) {
+          result.push({ formSelector: selectorStr, fields, submitSelector: submitSel });
+        }
+      };
+
+      if (formEls.length > 0) {
+        formEls.forEach((f, i) => processForm(f, i));
+      } else {
+        // No <form> tags — scan all visible inputs as a single virtual form
+        const allInputs = document.querySelectorAll('input, textarea, select');
+        const fields = [];
+        allInputs.forEach(el => {
+          const tag = el.tagName.toLowerCase();
+          const type = el.getAttribute('type') || 'text';
+          if (['hidden', 'submit', 'button', 'reset', 'image', 'file'].includes(type)) return;
+          const name = el.getAttribute('name') || el.getAttribute('id') || el.getAttribute('placeholder') || '';
+          if (!name) return;
+          const fieldSel = el.id ? `#${el.id}` : el.name ? `[name="${el.name}"]` : null;
+          let fieldType = 'text';
+          if (tag === 'textarea') fieldType = 'textarea';
+          else if (tag === 'select') fieldType = el.multiple ? 'multiselect' : 'select';
+          else if (type === 'checkbox') fieldType = 'checkbox';
+          else if (type === 'radio') fieldType = 'radio';
+          else if (type === 'email') fieldType = 'email';
+          else if (type === 'password') fieldType = 'password';
+          else if (type === 'number') fieldType = 'number';
+          fields.push({ name, selector: fieldSel, type: fieldType });
+        });
+        if (fields.length > 0) result.push({ formSelector: null, fields, submitSelector: null });
+      }
+      return result;
+    });
+
+    res.json({ forms });
+  } catch (err) {
+    console.error('Form detection failed:', err);
+    res.status(500).json({ error: `Form detection failed: ${err.message}` });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+});
+
 // ══════════════════════════════════════════════════════════
 //  TEST RUNNER ENDPOINTS
 // ══════════════════════════════════════════════════════════
@@ -657,6 +812,11 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'testName is required' });
   }
 
+  const RUNNER_SCRIPTS = {
+    standard: 'ai_test_runner.js',
+    'tool-call': 'ai_tool_runner.js',
+  };
+
   const state = getRunnerState(userId);
 
   if (state.status === 'running') {
@@ -673,6 +833,12 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Test file not found' });
   }
 
+  // Auto-select runner by test type:
+  // general -> tool-call runner, all others -> standard runner.
+  const testContent = fs.readFileSync(testPath, 'utf-8');
+  const detectedType = detectTestType(testContent);
+  const runner = detectedType === 'general' ? 'tool-call' : 'standard';
+
   // Reset state for new run
   resetRunnerState(userId);
   state.status = 'running';
@@ -683,11 +849,18 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
 
   const currentRunId = state.runId;
   const currentUserId = userId;
+  const runnerEnv = { ...process.env };
+
+  if (runner === 'tool-call') {
+    runnerEnv.MCP_WORKSPACE_DIR = FILES_DIR;
+    runnerEnv.MCP_OUTPUT_DIR = '.';
+  }
 
   // Spawn the test runner as a child process
-  const child = spawn('node', ['ai_test_runner.js', `tests/${testName}`], {
+  const runnerScript = RUNNER_SCRIPTS[runner];
+  const child = spawn('node', [runnerScript, `tests/${testName}`], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env },
+    env: runnerEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true
   });
@@ -714,6 +887,12 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       // Detect performance test marker — notify UI to suppress live monitor
       if (line.startsWith('__PERF_TEST__')) {
         broadcastSSE(currentUserId, 'perftest', { isPerformanceTest: true });
+        continue; // don't add to log buffer
+      }
+
+      // Detect form-validation marker (kept for compatibility).
+      // Form-validation runs should keep live monitor enabled.
+      if (line.startsWith('__FORM_VALIDATION_TEST__')) {
         continue; // don't add to log buffer
       }
 
@@ -844,7 +1023,13 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     broadcastSSE(currentUserId, 'done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
   });
 
-  res.json({ success: true, message: `Running test: ${testName}`, runId: currentRunId });
+  res.json({
+    success: true,
+    message: `Running test: ${testName}`,
+    runId: currentRunId,
+    runner,
+    detectedType
+  });
 });
 
 // ── GET /api/runner/logs (SSE) ─────────────────────────────
@@ -1374,6 +1559,16 @@ async function startServer() {
     { tests: TESTS_DIR, reports: REPORTS_DIR, baselines: BASELINES_DIR, files: FILES_DIR },
     'admin-001'
   );
+
+  // Global JSON error handler — ensures all unhandled errors return JSON,
+  // not Express's default HTML error page.
+  // Must be registered AFTER all routes (Express convention: 4-arg middleware).
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    console.error('Unhandled server error:', err);
+    if (res.headersSent) return;
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  });
 
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);

@@ -70,6 +70,56 @@ function isPerformanceTest(testText) {
 }
 
 /**
+ * Resolves the Chromium executable path using multiple fallback strategies.
+ * Exported so it can be reused by the server and form-validation runner.
+ * @returns {string} Absolute path to Chromium binary
+ */
+export function findChromiumPath() {
+  let chromiumPath;
+
+  // 1. Try playwright-core's reported path
+  try {
+    const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    if (reported && fs.existsSync(reported)) chromiumPath = reported;
+  } catch { /* ignore */ }
+
+  // 2. Scan ms-playwright cache for any installed chromium (not headless_shell)
+  if (!chromiumPath) {
+    const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
+    try {
+      const dirs = fs.readdirSync(cacheDir)
+        .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
+        .sort().reverse();
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
+          path.join(cacheDir, dir, 'chrome-linux', 'chrome')
+        ];
+        const found = candidates.find(p => fs.existsSync(p));
+        if (found) { chromiumPath = found; break; }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 3. Fallback to system-installed Chromium / Chrome
+  if (!chromiumPath) {
+    const fallbacks = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/snap/bin/chromium'
+    ];
+    chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
+  }
+
+  if (!chromiumPath || !fs.existsSync(chromiumPath)) {
+    throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
+  }
+  return chromiumPath;
+}
+
+/**
  * Parses a performance YAML and returns the minimal config needed to run Lighthouse.
  * Supports both the new simple format (target.url + target.formFactor) and
  * older formats (url: key, or URL regex fallback).
@@ -77,7 +127,7 @@ function isPerformanceTest(testText) {
 function parsePerformanceConfig(testText) {
   const testName = (testText.match(/^performance:\s*(.+)$/m)?.[1] || 'performance-test').trim();
 
-  // Parse categories — no PWA
+  // Parse categories
   const VALID_CATS = new Set(['performance', 'accessibility', 'best-practices', 'seo']);
   let categories = ['performance'];
 
@@ -97,7 +147,7 @@ function parsePerformanceConfig(testText) {
     }
   }
 
-  // Parse multiple URLs from targets: block (new format)
+  // Parse multiple URLs from targets
   let urls = [];
   const targetsBlock = testText.match(/^\s*targets\s*:\s*\n((?:[ \t]*-[ \t]+\S+[ \t]*\n?)+)/m);
   if (targetsBlock) {
@@ -272,50 +322,6 @@ class StatelessMCPRunner {
   }
 
   /**
-   * Resolves the Chromium executable path using multiple fallback strategies.
-   * @returns {Promise<string>} Absolute path to Chromium binary
-   */
-  async _findChromiumPath() {
-    let chromiumPath;
-
-    // 1. Try playwright-core's reported path
-    try {
-      const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8' }).trim();
-      if (reported && fs.existsSync(reported)) chromiumPath = reported;
-    } catch { /* ignore */ }
-
-    // 2. Scan ms-playwright cache for any installed chromium
-    if (!chromiumPath) {
-      const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
-      try {
-        const dirs = fs.readdirSync(cacheDir)
-          .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
-          .sort().reverse();
-        for (const dir of dirs) {
-
-          const candidates = [
-            path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
-            path.join(cacheDir, dir, 'chrome-linux', 'chrome')
-          ];
-          const found = candidates.find(p => fs.existsSync(p));
-          if (found) { chromiumPath = found; break; }
-        }
-      } catch { /* ignore */ }
-    }
-
-    // 3. Fallback to system-installed chromium
-    if (!chromiumPath) {
-      const fallbacks = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium'];
-      chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
-    }
-
-    if (!chromiumPath || !fs.existsSync(chromiumPath)) {
-      throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
-    }
-    return chromiumPath;
-  }
-
-  /**
    * Collects negative audits from both mobile + desktop, calls the LLM for
    * brief pointwise fix suggestions, and returns them keyed by category.
    * Non-fatal — returns {} on any error.
@@ -384,7 +390,7 @@ class StatelessMCPRunner {
     log.info(`🔗 URLs (${perfConfig.urls.length}): ${perfConfig.urls.join(', ')}`);
     log.info(`📊 Categories: ${perfConfig.categories.join(', ')}`);
 
-    const chromiumPath = await this._findChromiumPath();
+    const chromiumPath = findChromiumPath();
     log.info(`Using Chromium at: ${chromiumPath}`);
 
     const perfReportGen = new PerformanceReportGenerator({ outputDir: config.reporting.outputDir });
@@ -445,7 +451,7 @@ class StatelessMCPRunner {
     fs.mkdirSync(screenshotsDir, { recursive: true });
     fs.mkdirSync(uploadsDir, { recursive: true });
 
-    const chromiumPath = await this._findChromiumPath();
+    const chromiumPath = findChromiumPath();
     log.info(`Using Chromium at: ${chromiumPath}`);
 
     // Launch Chromium with CDP and connect MCP to it
@@ -585,6 +591,14 @@ class StatelessMCPRunner {
 
           // undefined/null means element not found or action had no effect
           if (value === 'undefined' || value === 'null') {
+            const error = new Error(
+              `MCP Tool returned ${value} — element not found or action had no effect`
+            );
+            error.duration = duration;
+            throw error;
+          }
+
+          if (value === 'error' || value === 'null') {
             const error = new Error(
               `MCP Tool returned ${value} — element not found or action had no effect`
             );

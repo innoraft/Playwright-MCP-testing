@@ -2,8 +2,10 @@ import { useState } from 'react';
 
 export default function GeneralTestForm({ initialData, onSave, saving }) {
   const [testName, setTestName] = useState(initialData?.testName || '');
+  const [suiteDescription, setSuiteDescription] = useState(initialData?.suiteDescription || '');
+  const [baseUrl, setBaseUrl] = useState(initialData?.baseUrl || '');
   const [groups, setGroups] = useState(
-    initialData?.groups || [{ scenario: '', steps: '' }]
+    initialData?.groups || [{ scenario: '', description: '', steps: '' }]
   );
   const [errors, setErrors] = useState({});
 
@@ -21,7 +23,7 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
   };
 
   const addGroup = () => {
-    setGroups([...groups, { scenario: '', steps: '' }]);
+    setGroups([...groups, { scenario: '', description: '', steps: '' }]);
   };
 
   const removeGroup = (index) => {
@@ -33,6 +35,7 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
   const validate = () => {
     const errs = {};
     if (!testName.trim()) errs.testName = 'Test name is required';
+    if (!baseUrl.trim()) errs.baseUrl = 'Base URL is required';
     groups.forEach((g, i) => {
       if (!g.scenario.trim()) errs[`group-${i}-scenario`] = 'Scenario is required';
       if (!g.steps.trim()) errs[`group-${i}-steps`] = 'Test steps are required';
@@ -42,17 +45,35 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
   };
 
   // ── YAML Generation ───────────────────────────────────
+  const quoteYaml = (value = '') => `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
   const generateYAML = () => {
-    const allSteps = [];
-    groups.forEach((g) => {
-      // Add scenario as a comment
-      allSteps.push(`  # ${g.scenario}`);
-      // Parse steps (each line becomes a step)
-      g.steps.split('\n').filter(s => s.trim()).forEach(step => {
-        allSteps.push(`  - ${step.trim()}`);
-      });
-    });
-    return `Test: ${testName}\n\nSteps:\n${allSteps.join('\n')}\n`;
+    const testBlocks = groups.map((g) => {
+      const scenarioDescription = g.description.trim() || `Scenario for ${g.scenario.trim()}`;
+      const stepLines = g.steps
+        .split('\n')
+        .map(step => step.trim())
+        .filter(Boolean)
+        .map(step => `      - ${quoteYaml(step)}`)
+        .join('\n');
+
+      return [
+        `  - name: ${quoteYaml(g.scenario.trim())}`,
+        `    description: ${quoteYaml(scenarioDescription)}`,
+        `    steps:`,
+        stepLines,
+      ].join('\n');
+    }).join('\n');
+
+    return [
+      `name: ${quoteYaml(testName.trim())}`,
+      `description: ${quoteYaml(suiteDescription.trim() || `Test suite for ${testName.trim()}`)}`,
+      `baseUrl: ${quoteYaml(baseUrl.trim())}`,
+      '',
+      'tests:',
+      testBlocks,
+      '',
+    ].join('\n');
   };
 
   // ── Save ──────────────────────────────────────────────
@@ -86,6 +107,38 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
           }}
         />
         {errors.testName && <span className="form-error-text">{errors.testName}</span>}
+      </div>
+
+      <div className="form-group">
+        <label className="form-label" htmlFor="general-suite-description">
+          Suite Description
+        </label>
+        <input
+          id="general-suite-description"
+          className="form-input"
+          type="text"
+          placeholder="e.g. Tests for user authentication"
+          value={suiteDescription}
+          onChange={(e) => setSuiteDescription(e.target.value)}
+        />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label" htmlFor="general-base-url">
+          Base URL <span className="form-required">*</span>
+        </label>
+        <input
+          id="general-base-url"
+          className={`form-input ${errors.baseUrl ? 'form-input-error' : ''}`}
+          type="text"
+          placeholder="https://www.example.com"
+          value={baseUrl}
+          onChange={(e) => {
+            setBaseUrl(e.target.value);
+            setErrors(prev => { const n = { ...prev }; delete n.baseUrl; return n; });
+          }}
+        />
+        {errors.baseUrl && <span className="form-error-text">{errors.baseUrl}</span>}
       </div>
 
       <hr className="form-divider" />
@@ -131,12 +184,24 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
 
             <div className="form-group">
               <label className="form-label form-label-sm">
+                Scenario Description
+              </label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="e.g. Verify login alert interactions"
+                value={group.description || ''}
+                onChange={(e) => updateGroup(index, 'description', e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label form-label-sm">
                 Test Steps <span className="form-required">*</span>
                 <span className="form-label-hint">(one step per line)</span>
               </label>
               <textarea
                 className={`form-textarea ${errors[`group-${index}-steps`] ? 'form-input-error' : ''}`}
-                placeholder={"Navigate to https://example.com\nWait for the page to load\nVerify that the heading is visible"}
                 value={group.steps}
                 onChange={(e) => updateGroup(index, 'steps', e.target.value)}
                 rows={5}
