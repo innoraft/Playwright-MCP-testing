@@ -291,8 +291,11 @@ export async function runLighthouseAudit(
   for (let i = 0; i < runs; i++) {
     const chrome = await _spawnChrome(chromiumPath);
     try {
+      console.log(`ℹ️  ${formFactor} run ${i + 1}/${runs}: auditing...`);
       const flags = _buildFlags(chrome.port, formFactor, categories);
       const { lhr } = await lighthouse(url, flags);
+      const score = Math.round((lhr.categories?.performance?.score ?? 0) * 100);
+      console.log(`ℹ️  ${formFactor} run ${i + 1}/${runs}: done (score: ${score})`);
       lhrs.push(lhr);
     } finally {
       chrome.kill();

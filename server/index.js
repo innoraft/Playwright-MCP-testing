@@ -1066,11 +1066,20 @@ app.get('/api/runner/logs', (req, res, next) => {
     })}\n\n`);
   }
 
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 15000);
+
   // Register client for future events
   state.sseClients.push(res);
 
   // Cleanup on disconnect
   req.on('close', () => {
+    clearInterval(heartbeat);
     state.sseClients = state.sseClients.filter(c => c !== res);
   });
 });
