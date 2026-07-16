@@ -15,7 +15,12 @@ export class PerformanceReportGenerator {
 
   generateReport(report) {
     this.ensureOutputDir();
-    const filePath = path.join(this.outputDir, `performance_report_${Date.now()}.html`);
+    const now = new Date(report?.generatedAt ?? Date.now());
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeName = (report?.testName || 'unnamed_suite')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .toLowerCase();
+    const filePath = path.join(this.outputDir, `${safeName}-${timestamp}.html`);
     fs.writeFileSync(filePath, this.generateHTML(report), 'utf-8');
     return { htmlReport: filePath };
   }

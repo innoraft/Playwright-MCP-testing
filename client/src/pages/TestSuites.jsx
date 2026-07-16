@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
 import PerformanceMetricsForm from '../components/PerformanceMetricsForm';
@@ -19,6 +19,8 @@ export default function TestSuites() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Form data for editing
   const [generalData, setGeneralData] = useState(null);
@@ -31,6 +33,22 @@ export default function TestSuites() {
     if (/(^|\n)\s*tests\s*:/i.test(content)) return 'general';
     if (trimmed.startsWith('name:')) return 'visual-regression';
     return 'general';
+  };
+
+  // ── Delete all tests ─────────────────────────────────
+  const handleDeleteAll = async () => {
+    try {
+      const res = await authFetch('/api/tests', { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete all failed');
+
+      const result = await res.json();
+      showToast(`Deleted ${result.deletedCount || 0} tests`);
+      setConfirmDeleteAll(false);
+      handleNewTest();
+      await fetchTests();
+    } catch (err) {
+      showToast(err.message || 'Could not delete tests', 'error');
+    }
   };
 
   // ── Toast helper ──────────────────────────────────────
@@ -226,6 +244,11 @@ export default function TestSuites() {
     }
   };
 
+  const filteredTests = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return tests.filter((test) => query.length === 0 || test.name.toLowerCase().includes(query));
+  }, [tests, searchQuery]);
+
   // ── Select a test from the list ───────────────────────
   const handleSelectTest = async (test) => {
     try {
@@ -267,7 +290,14 @@ export default function TestSuites() {
     try {
       const res = await authFetch('/api/tests', {
         method: 'POST',
-        body: JSON.stringify({ name: fileName, content }),
+        body: JSON.stringify({
+          name: fileName,
+          content,
+          // When editing an existing test, pass its original filename
+          // so the server can skip it in duplicate checks and delete
+          // the old file if the name was changed.
+          ...(selectedTest && { oldName: selectedTest.name }),
+        }),
       });
 
       if (!res.ok) {
@@ -345,11 +375,33 @@ export default function TestSuites() {
         </div>
       )}
 
+      {confirmDeleteAll && (
+        <div className="modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-icon">🗑️</span>
+              <h3>Delete All Tests</h3>
+            </div>
+            <p className="modal-text">
+              Are you sure you want to delete all visible tests? This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button className="btn-outline" onClick={() => setConfirmDeleteAll(false)}>
+                Cancel
+              </button>
+              <button className="btn-danger" onClick={handleDeleteAll}>
+                Delete All Tests
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Test Suites</h1>
         <p className="page-subtitle">
-          Create, edit, and manage your automated tests. Choose a form type or use the advanced editor.
+          Create, edit, and manage your automated tests.
         </p>
       </div>
 
@@ -359,9 +411,39 @@ export default function TestSuites() {
         <aside className="test-list-panel">
           <div className="test-list-header">
             <span className="test-list-title">Saved Tests</span>
-            <button className="btn-new-test" onClick={handleNewTest} title="Create new test">
-              ＋
-            </button>
+            <div className="test-list-header-actions">
+              <button className="btn-new-test" onClick={handleNewTest} title="Create new test">
+                ＋
+              </button>
+              <button
+                className="btn-danger btn-delete-all"
+                onClick={() => setConfirmDeleteAll(true)}
+                title="Delete all tests"
+                disabled={tests.length === 0}
+                aria-label="Delete all tests"
+              >
+                🗑️
+              </button>
+            </div>
+          </div>
+
+          <div className="test-list-filters">
+            <input
+              type="search"
+              className="test-list-search-input"
+              placeholder="Search tests..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="test-list-clear-filters"
+                onClick={() => setSearchQuery('')}
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -375,9 +457,14 @@ export default function TestSuites() {
               <span className="test-list-empty-icon">📂</span>
               <span>No tests yet</span>
             </div>
+          ) : filteredTests.length === 0 ? (
+            <div className="test-list-empty">
+              <span className="test-list-empty-icon">🔎</span>
+              <span>No matching tests</span>
+            </div>
           ) : (
             <div className="test-list">
-              {tests.map(test => (
+              {filteredTests.map(test => (
                 <div
                   key={test.name}
                   className={`test-list-item ${selectedTest?.name === test.name ? 'active' : ''}`}
@@ -387,9 +474,11 @@ export default function TestSuites() {
                     <span className="test-list-item-icon">
                       {test.type === 'visual-regression' ? '🖼️' : test.type === 'performance' ? '⚡' : '📋'}
                     </span>
-                    <span className="test-list-item-name" title={test.name}>
-                      {test.name.replace('.test.yml', '')}
-                    </span>
+                    <div className="test-list-item-text">
+                      <span className="test-list-item-name" title={test.name}>
+                        {test.name.replace('.test.yml', '')}
+                      </span>
+                    </div>
                   </div>
                   <button
                     className="test-list-item-delete"
@@ -411,16 +500,28 @@ export default function TestSuites() {
         <div className="test-form-panel">
           {/* Tabs */}
           <div className="tabs-container">
-            {TABS.map(tab => (
-              <button
-                key={tab.id}
-                className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <span className="tab-btn-icon">{tab.icon}</span>
-                {tab.label}
-              </button>
-            ))}
+            {TABS.map(tab => {
+              const tabToType = {
+                general: 'general',
+                visual: 'visual-regression',
+                performance: 'performance'
+              };
+              return (
+                <button
+                  key={tab.id}
+                  className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    if (selectedTest && selectedTest.type !== tabToType[tab.id]) {
+                      setSelectedTest(null);
+                    }
+                  }}
+                >
+                  <span className="tab-btn-icon">{tab.icon}</span>
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Tab Content */}

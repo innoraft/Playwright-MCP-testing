@@ -9,7 +9,6 @@ import { fileURLToPath } from "url";
  * @param {string} options.suiteName - Name of the test suite
  * @param {string} options.baseUrl - Base URL of the application under test
  * @param {Array<object>} options.results - Array of step results
- * @param {object} options.tokenUsage - Token usage stats
  * @param {number} options.totalDurationMs - Total run duration in ms
  * @param {string} [options.outputDir] - Directory to write the report to (default: "reports")
  * @returns {string} Absolute path to the generated report file
@@ -18,7 +17,6 @@ export function generateHtmlReport({
   suiteName,
   baseUrl,
   results,
-  tokenUsage,
   totalDurationMs,
   outputDir = "test-reports",
 }) {
@@ -150,18 +148,6 @@ export function generateHtmlReport({
         </tbody>
       </table>
     </div>
-
-    <!-- Token Usage Footer -->
-    <div class="footer">
-      <h3>📈 Token Usage</h3>
-      <div class="token-grid">
-        <div class="token-item">Requests: <span class="value">${tokenUsage.requests ?? 0}</span></div>
-        <div class="token-item">Input: <span class="value">${(tokenUsage.inputTokens ?? 0).toLocaleString()}</span></div>
-        <div class="token-item">Output: <span class="value">${(tokenUsage.outputTokens ?? 0).toLocaleString()}</span></div>
-        <div class="token-item">Total: <span class="value">${(tokenUsage.totalTokens ?? 0).toLocaleString()}</span></div>
-      </div>
-    </div>
-
   </div>
 </body>
 </html>`;

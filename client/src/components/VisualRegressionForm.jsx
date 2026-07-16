@@ -124,6 +124,7 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
       steps.push(`  - Scroll the page till the footer`);
       steps.push(`  - Wait for 2 seconds`);
       steps.push(`  - Navigate the page till the header`);
+      steps.push(`  - Wait for 2 seconds`);
       steps.push(`  - Take a screenshot of the full page and save by giving the name '${screenshotName}'`);
       steps.push(`  - Check visual regression at breakpoint ${bp.width}px using screenshot files/screenshots/${screenshotName} strictly checking if threshold is ${threshold} or the file is less than ${failOnPercent} percent differing otherwise failing.`);
     });
@@ -336,7 +337,6 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
 
       {/* Save */}
       <div className="save-section">
-        <span className="save-hint">YAML with scroll + screenshot steps is generated automatically</span>
         <button
           className={`btn-save ${saving ? 'saving' : ''}`}
           onClick={handleSave}

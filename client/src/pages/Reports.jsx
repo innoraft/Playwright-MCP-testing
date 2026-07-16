@@ -10,6 +10,7 @@ export default function Reports({ initialReport }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterResult, setFilterResult] = useState('all'); // 'all' | 'pass' | 'fail'
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const pollRef = useRef(null);
   const hasAutoSelected = useRef(false);
 
@@ -77,6 +78,23 @@ export default function Reports({ initialReport }) {
       fetchReports(true);
     } catch {
       showToast('Could not delete report', 'error');
+    }
+  };
+
+  // ── Delete all reports ───────────────────────────────
+  const handleDeleteAll = async () => {
+    try {
+      const res = await authFetch('/api/reports', { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete reports');
+
+      const result = await res.json();
+      showToast(`Deleted ${result.deletedCount || 0} reports`);
+      setConfirmDeleteAll(false);
+      setSelectedReport(null);
+      hasAutoSelected.current = false;
+      await fetchReports(true);
+    } catch {
+      showToast('Could not delete reports', 'error');
     }
   };
 
@@ -166,13 +184,24 @@ export default function Reports({ initialReport }) {
         <aside className="report-list-panel">
           <div className="report-list-header">
             <span className="report-list-title">Reports ({filteredReports.length})</span>
-            <button
-              className="btn-new-test"
-              onClick={() => fetchReports()}
-              title="Refresh reports"
-            >
-              ↻
-            </button>
+            <div className="report-list-header-actions">
+              <button
+                className="btn-new-test"
+                onClick={() => fetchReports()}
+                title="Refresh reports"
+              >
+                ↻
+              </button>
+              <button
+                className="btn-danger btn-delete-all"
+                onClick={() => setConfirmDeleteAll(true)}
+                title="Delete all reports"
+                disabled={reports.length === 0}
+                aria-label="Delete all reports"
+              >
+                🗑️
+              </button>
+            </div>
           </div>
 
           {/* Search & Filter */}
@@ -324,6 +353,25 @@ export default function Reports({ initialReport }) {
               </button>
               <button className="btn-danger" onClick={() => handleDelete(confirmDelete)}>
                 Delete Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteAll && (
+        <div className="modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Delete All Reports?</h3>
+            <p className="modal-text">
+              Are you sure you want to delete all visible reports? This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button className="btn-outline" onClick={() => setConfirmDeleteAll(false)}>
+                Cancel
+              </button>
+              <button className="btn-danger" onClick={handleDeleteAll}>
+                Delete All Reports
               </button>
             </div>
           </div>
