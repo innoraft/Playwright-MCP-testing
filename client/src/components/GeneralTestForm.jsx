@@ -220,7 +220,6 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
 
       {/* Save */}
       <div className="save-section">
-        <span className="save-hint">YAML is generated automatically from your inputs</span>
         <button
           className={`btn-save ${saving ? 'saving' : ''}`}
           onClick={handleSave}

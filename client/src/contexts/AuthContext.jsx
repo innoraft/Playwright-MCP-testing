@@ -4,6 +4,12 @@ const AuthContext = createContext(null);
 
 const TOKEN_KEY = 'pmcp_token';
 const USER_KEY = 'pmcp_user';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://localhost:3001' : '');
+
+const resolveApiUrl = (url) => {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${API_BASE_URL}${url}`;
+};
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
@@ -35,7 +41,7 @@ export function AuthProvider({ children }) {
     if (options.body && !(options.body instanceof FormData)) {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json';
     }
-    const res = await fetch(url, { ...options, headers });
+    const res = await fetch(resolveApiUrl(url), { ...options, headers });
 
     // Auto-logout on 401
     if (res.status === 401) {
@@ -68,7 +74,7 @@ export function AuthProvider({ children }) {
 
     (async () => {
       try {
-        const res = await fetch('/api/auth/me', {
+        const res = await fetch(resolveApiUrl('/api/auth/me'), {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (!res.ok) throw new Error('Invalid token');
@@ -94,7 +100,7 @@ export function AuthProvider({ children }) {
 
   // ── Login ─────────────────────────────────────────────
   const login = useCallback(async (username, password) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(resolveApiUrl('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })

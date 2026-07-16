@@ -525,9 +525,16 @@ app.get('/api/tests', requireAuth, (req, res) => {
       .filter(f => f.endsWith('.test.yml'))
       .filter(f => isAdmin || ownedFiles.has(f))
       .map(f => {
-        const content = fs.readFileSync(path.join(TESTS_DIR, f), 'utf-8');
+        const filePath = path.join(TESTS_DIR, f);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const stats = fs.statSync(filePath);
         const type = detectTestType(content);
-        return { name: f, type };
+        return {
+          name: f,
+          type,
+          createdAt: stats.birthtime ? stats.birthtime.toISOString() : null,
+          modifiedAt: stats.mtime ? stats.mtime.toISOString() : null,
+        };
       });
 
     res.json(files);
@@ -564,10 +571,14 @@ app.get('/api/tests/:name', requireAuth, (req, res) => {
 });
 
 // ── POST /api/tests ────────────────────────────────────────
-// Save (create or update) a test file
+// Save (create or update) a test file.
+// • New test  → duplicate-name guard runs
+// • Edit      → client sends `oldName` (the original filename)
+//               so the guard skips that file and if the name
+//               changed the old file is deleted after saving.
 app.post('/api/tests', requireAuth, (req, res) => {
   try {
-    const { name, content } = req.body;
+    const { name, content, oldName } = req.body;
 
     if (!name || !content) {
       return res.status(400).json({ error: 'Name and content are required' });
@@ -580,6 +591,13 @@ app.post('/api/tests', requireAuth, (req, res) => {
       fileName = `${fileName}.test.yml`;
     }
 
+    // Normalize oldName the same way
+    let oldFileName = oldName || null;
+    if (oldFileName && !oldFileName.endsWith('.test.yml')) {
+      oldFileName = oldFileName.replace(/\.yml$/, '').replace(/\.test$/, '');
+      oldFileName = `${oldFileName}.test.yml`;
+    }
+
     // Sanitize
     if (fileName.includes('..') || fileName.includes('/')) {
       return res.status(400).json({ error: 'Invalid file name' });
@@ -590,10 +608,54 @@ app.post('/api/tests', requireAuth, (req, res) => {
     }
 
     const filePath = path.join(TESTS_DIR, fileName);
+
+    // ── Duplicate-name guard ──────────────────────────────
+    // Normalise names so "my-test" and "my_test" are treated
+    // as the same name.  When editing (oldName provided), the
+    // old file is excluded from the collision check.
+    const normalize = (n) => n.replace(/\.test\.yml$/, '').replace(/[-_]+/g, '_').toLowerCase();
+    const incomingNorm = normalize(fileName);
+    const oldNorm = oldFileName ? normalize(oldFileName) : null;
+
+    const typeLabels = {
+      'general': 'General Test',
+      'visual-regression': 'Visual Regression',
+      'performance': 'Performance Metrics',
+      'form-validation': 'Form Validation',
+    };
+
+    const existingFiles = fs.existsSync(TESTS_DIR)
+      ? fs.readdirSync(TESTS_DIR).filter(f => f.endsWith('.test.yml'))
+      : [];
+
+    for (const existing of existingFiles) {
+      const existingNorm = normalize(existing);
+      // Skip the file we're editing (it's being replaced / renamed)
+      if (oldNorm && existingNorm === oldNorm) continue;
+      if (existingNorm === incomingNorm) {
+        const existingContent = fs.readFileSync(path.join(TESTS_DIR, existing), 'utf-8');
+        const existingType = detectTestType(existingContent);
+        const label = typeLabels[existingType] || existingType;
+        return res.status(409).json({
+          error: `A test named "${existing.replace('.test.yml', '')}" already exists as a "${label}" test. Please choose a different name.`,
+        });
+      }
+    }
+
+    // Write the new / updated file
     fs.writeFileSync(filePath, content, 'utf-8');
 
     // Track ownership — creator owns it
     setOwner('tests', fileName, req.user.userId);
+
+    // If the name changed during an edit, delete the old file
+    if (oldFileName && normalize(oldFileName) !== normalize(fileName)) {
+      const oldPath = path.join(TESTS_DIR, oldFileName);
+      if (fs.existsSync(oldPath)) {
+        fs.unlinkSync(oldPath);
+        removeOwner('tests', oldFileName);
+      }
+    }
 
     res.json({ success: true, message: `Test saved as ${fileName}`, fileName });
   } catch (err) {
@@ -627,6 +689,35 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
   } catch (err) {
     console.error('Failed to delete test:', err);
     res.status(500).json({ error: 'Failed to delete test file' });
+  }
+});
+
+// ── DELETE /api/tests ─────────────────────────────────────
+// Delete all visible test files for the current user (must be owner or admin)
+app.delete('/api/tests', requireAuth, (req, res) => {
+  try {
+    const isAdmin = reqIsAdmin(req);
+    const ownedFiles = new Set(getOwnedFilenames('tests', req.user.userId, isAdmin));
+    const deletableFiles = fs.existsSync(TESTS_DIR)
+      ? fs.readdirSync(TESTS_DIR)
+          .filter((f) => f.endsWith('.test.yml'))
+          .filter((f) => isAdmin || ownedFiles.has(f))
+      : [];
+
+    let deletedCount = 0;
+    for (const fileName of deletableFiles) {
+      const filePath = path.join(TESTS_DIR, fileName);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        removeOwner('tests', fileName);
+        deletedCount += 1;
+      }
+    }
+
+    res.json({ success: true, deletedCount });
+  } catch (err) {
+    console.error('Failed to bulk delete tests:', err);
+    res.status(500).json({ error: 'Failed to delete test files' });
   }
 });
 
@@ -813,8 +904,9 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   }
 
   const RUNNER_SCRIPTS = {
-    standard: 'ai_test_runner.js',
     'tool-call': 'ai_tool_runner.js',
+    'visual-regression': 'ai_visual_runner.js',
+    performance: 'ai_lighthouse_runner.js',
   };
 
   const state = getRunnerState(userId);
@@ -833,11 +925,23 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Test file not found' });
   }
 
-  // Auto-select runner by test type:
-  // general -> tool-call runner, all others -> standard runner.
+  // Auto-select dedicated runner by test type.
   const testContent = fs.readFileSync(testPath, 'utf-8');
   const detectedType = detectTestType(testContent);
-  const runner = detectedType === 'general' ? 'tool-call' : 'standard';
+  let runner;
+  switch (detectedType) {
+    case 'performance':
+      runner = 'performance';
+      break;
+    case 'visual-regression':
+      runner = 'visual-regression';
+      break;
+    case 'general':
+    case 'form-validation':
+    default:
+      runner = 'tool-call';
+      break;
+  }
 
   // Reset state for new run
   resetRunnerState(userId);
@@ -858,6 +962,9 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
 
   // Spawn the test runner as a child process
   const runnerScript = RUNNER_SCRIPTS[runner];
+  if (!runnerScript) {
+    return res.status(400).json({ error: `No runner configured for test type: ${detectedType}` });
+  }
   const child = spawn('node', [runnerScript, `tests/${testName}`], {
     cwd: PROJECT_ROOT,
     env: runnerEnv,
@@ -1303,6 +1410,35 @@ app.delete('/api/reports/:filename', requireAuth, (req, res) => {
   } catch (err) {
     console.error('Failed to delete report:', err);
     res.status(500).json({ error: 'Failed to delete report' });
+  }
+});
+
+// ── DELETE /api/reports ───────────────────────────────────
+// Delete all visible reports for the current user (must be owner or admin)
+app.delete('/api/reports', requireAuth, (req, res) => {
+  try {
+    const isAdmin = reqIsAdmin(req);
+    const ownedFiles = new Set(getOwnedFilenames('reports', req.user.userId, isAdmin));
+    const deletableFiles = fs.existsSync(REPORTS_DIR)
+      ? fs.readdirSync(REPORTS_DIR)
+          .filter((f) => f.endsWith('.html'))
+          .filter((f) => isAdmin || ownedFiles.has(f))
+      : [];
+
+    let deletedCount = 0;
+    for (const fileName of deletableFiles) {
+      const filePath = path.join(REPORTS_DIR, fileName);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        removeOwner('reports', fileName);
+        deletedCount += 1;
+      }
+    }
+
+    res.json({ success: true, deletedCount });
+  } catch (err) {
+    console.error('Failed to bulk delete reports:', err);
+    res.status(500).json({ error: 'Failed to delete reports' });
   }
 });
 

@@ -26,7 +26,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   useEffect(() => {
     authFetch('/api/tests')
       .then(res => res.json())
-      .then(data => setTests(data))
+      .then(data => setTests((Array.isArray(data) ? data : []).filter(t => t.type !== 'form-validation')))
       .catch(() => showToast('Could not load test files', 'error'));
   }, [showToast, authFetch]);
 

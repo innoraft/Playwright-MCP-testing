@@ -11,6 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { generateHtmlReport } from "./tool-call-report-generator.js";
 import { CDPService } from './src/cdp/cdp.service.js';
 import llmConfig from './config/llm.config.js';
+import { findChromiumPath } from './src/utils/browser-utils.js';
 
 setMaxListeners(50);
 
@@ -27,61 +28,9 @@ const VIEWPORT_HEIGHT = process.env.PLAYWRIGHT_VIEWPORT_HEIGHT ?? "900";
 const MCP_BROWSER = process.env.MCP_BROWSER?.trim();
 const MCP_ISOLATED = (process.env.MCP_ISOLATED ?? "true").toLowerCase() === "true";
 const MCP_HEADLESS = (process.env.MCP_HEADLESS ?? "false").toLowerCase() === "true";
-const CHUNK_SIZE = Number(process.env.CHUNK_SIZE) || 7;
+const CHUNK_SIZE = Number(process.env.CHUNK_SIZE) || 5;
 const PRE_EXEC_STEPS = 2;
 const PRE_NAV_WAIT_SECONDS = Number(process.env.PRE_NAV_WAIT_SECONDS) || 10;
-
-/**
- * Resolves the Chromium executable path using multiple fallback strategies.
- * Exported so it can be reused by the server and form-validation runner.
- * @returns {string} Absolute path to Chromium binary
- */
-export function findChromiumPath() {
-  let chromiumPath;
-
-  // 1. Try playwright-core's reported path
-  try {
-    const reported = execSync('node -e "const pw = require(\'playwright-core\'); console.log(pw.chromium.executablePath())"', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
-    if (reported && fs.existsSync(reported)) chromiumPath = reported;
-  } catch { /* ignore */ }
-
-  // 2. Scan ms-playwright cache for any installed chromium (not headless_shell)
-  if (!chromiumPath) {
-    const cacheDir = path.join(process.env.HOME || '/root', '.cache', 'ms-playwright');
-    try {
-      const dirs = fs.readdirSync(cacheDir)
-        .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
-        .sort().reverse();
-      for (const dir of dirs) {
-        const candidates = [
-          path.join(cacheDir, dir, 'chrome-linux64', 'chrome'),
-          path.join(cacheDir, dir, 'chrome-linux', 'chrome')
-        ];
-        const found = candidates.find(p => fs.existsSync(p));
-        if (found) { chromiumPath = found; break; }
-      }
-    } catch { /* ignore */ }
-  }
-
-  // 3. Fallback to system-installed Chromium / Chrome
-  if (!chromiumPath) {
-    const fallbacks = [
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/chromium',
-      '/snap/bin/chromium'
-    ];
-    chromiumPath = fallbacks.find(p => fs.existsSync(p)) || '';
-  }
-
-  if (!chromiumPath || !fs.existsSync(chromiumPath)) {
-    throw new Error('Chromium not found. Run "npx playwright install chromium" to install it.');
-  }
-  return chromiumPath;
-}
-
-// Executor Instructions
 
 const EXECUTOR_INSTRUCTIONS = fs.readFileSync(
   path.join (__rootDir, "src/prompts", "executor-agent-prompt.md"),
@@ -592,7 +541,7 @@ async function main() {
   const executorAgent = new Agent({
     name: "Executor",
     instructions: EXECUTOR_INSTRUCTIONS,
-    model: "gpt-5-mini"?? "got-55-mini",
+    model: llmConfig.model,
     modelSettings: { parallelToolCalls: false },
     mcpServers: [mcpServer],
     outputType: chunkResultSchema,
@@ -613,7 +562,6 @@ async function main() {
 
   // { stepNumber, stepText, status, reason, screenshotBase64, durationMs }
   const allResults = [];
-  const tokenUsage = { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const runStartTime = Date.now();
   const screenshotsOutputDir = path.resolve(MCP_WORKSPACE_DIR, MCP_OUTPUT_DIR);
   let shouldStop = false;
@@ -642,7 +590,6 @@ async function main() {
         suiteName,
         baseUrl,
         results: allResults,
-        tokenUsage,
         totalDurationMs: Date.now() - runStartTime,
       });
       console.log(`📄 Partial report saved: ${reportPath}`);
@@ -706,7 +653,7 @@ async function main() {
         .join("\n");
 
       try {
-        const stream = await run(executorAgent, prompt, { stream: true, maxTurns: 15 });
+        const stream = await run(executorAgent, prompt, { stream: true, maxTurns: 30 });
 
         // Stream events for live console output
         for await (const event of stream) {
@@ -727,13 +674,6 @@ async function main() {
             console.log(`    🤖 Agent: ${event.agent.name}`);
           }
         }
-
-        // Track token usage
-        const usage = stream?.state?.usage;
-        tokenUsage.requests += Number(usage?.requests ?? 0);
-        tokenUsage.inputTokens += Number(usage?.inputTokens ?? 0);
-        tokenUsage.outputTokens += Number(usage?.outputTokens ?? 0);
-        tokenUsage.totalTokens += Number(usage?.totalTokens ?? 0);
 
         const chunkDurationMs = Date.now() - chunkStartTime;
 
@@ -896,18 +836,11 @@ async function main() {
     }
     console.log(`${"═".repeat(60)}\n`);
 
-    console.log(`📈 TOKEN USAGE (cumulative across all chunks)`);
-    console.log(`   Requests : ${tokenUsage.requests}`);
-    console.log(`   Input    : ${tokenUsage.inputTokens.toLocaleString()}`);
-    console.log(`   Output   : ${tokenUsage.outputTokens.toLocaleString()}`);
-    console.log(`   Total    : ${tokenUsage.totalTokens.toLocaleString()}\n`);
-
     // Generate HTML Report
     const reportPath = generateHtmlReport({
       suiteName,
       baseUrl,
       results: allResults,
-      tokenUsage,
       totalDurationMs,
     });
     console.log(`📄 HTML Report saved: ${reportPath}\n`);

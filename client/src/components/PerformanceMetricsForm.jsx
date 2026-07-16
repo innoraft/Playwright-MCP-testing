@@ -8,6 +8,8 @@ const CATEGORIES = [
   { id: 'best-practices', label: 'Best Practices', icon: '🔒', desc: 'Security, deprecated APIs, HTTPS' },
 ];
 
+const MAX_URLS = 5;
+
 export default function PerformanceMetricsForm({ initialData, onSave, saving }) {
   const [testName,   setTestName]   = useState(initialData?.testName   || '');
   const [urls,       setUrls]       = useState(
@@ -26,7 +28,9 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
     setErrors((prev) => { const n = { ...prev }; delete n[`url-${index}`]; return n; });
   };
 
-  const addUrl = () => setUrls((prev) => [...prev, '']);
+  const addUrl = () => {
+    setUrls((prev) => (prev.length >= MAX_URLS ? prev : [...prev, '']));
+  };
 
   const removeUrl = (index) => {
     if (urls.length <= 1) return;
@@ -100,7 +104,9 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
           <span className="form-label form-label--no-mb">
             Target URLs <span className="form-required">*</span>
           </span>
-          <span className="form-label-hint">{urls.length} URL{urls.length !== 1 ? 's' : ''} — each gets its own report</span>
+          <span className="form-label-hint">
+            {urls.length}/{MAX_URLS} URL{urls.length !== 1 ? 's' : ''} — each gets its own report
+          </span>
         </div>
 
         {urls.map((u, index) => (
@@ -137,8 +143,9 @@ export default function PerformanceMetricsForm({ initialData, onSave, saving }) 
           type="button"
           className="btn-add"
           onClick={addUrl}
+          disabled={urls.length >= MAX_URLS}
         >
-          + Add URL
+          {urls.length >= MAX_URLS ? `Max ${MAX_URLS} URLs reached` : '+ Add URL'}
         </button>
       </div>
 
