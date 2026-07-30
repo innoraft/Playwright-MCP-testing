@@ -30,7 +30,7 @@ export default function BaselineManager() {
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [authFetch, showToast]);
 
   useEffect(() => {
     fetchBaselines();
@@ -86,6 +86,7 @@ export default function BaselineManager() {
 
     let successCount = 0;
     let failCount = 0;
+    const failedMessages = [];
 
     for (let i = 0; i < uploadData.files.length; i++) {
       setUploadProgress({ current: i + 1, total: uploadData.files.length });
@@ -104,17 +105,37 @@ export default function BaselineManager() {
           body: formData
         });
 
-        if (!res.ok) throw new Error('Upload failed');
+        if (!res.ok) {
+          let message = 'Upload failed';
+          try {
+            const err = await res.json();
+            if (err?.error) message = err.error;
+          } catch {
+            // Keep default message.
+          }
+          throw new Error(message);
+        }
         successCount++;
-      } catch {
+      } catch (err) {
         failCount++;
+        failedMessages.push(err.message || 'Upload failed');
       }
     }
 
-    if (successCount > 0) {
-      showToast(`${successCount} baseline${successCount > 1 ? 's' : ''} uploaded${failCount > 0 ? ` (${failCount} failed)` : ''}`, failCount > 0 ? 'error' : 'success');
+    const conflictMessage = failedMessages.find(msg => /already exists/i.test(msg));
+    const firstFailureMessage = conflictMessage || failedMessages[0] || '';
+
+    if (failCount > 0) {
+      if (successCount > 0) {
+        showToast(
+          `${successCount} baseline${successCount > 1 ? 's' : ''} uploaded, ${failCount} failed. ${firstFailureMessage}`,
+          'error'
+        );
+      } else {
+        showToast(firstFailureMessage || 'All uploads failed', 'error');
+      }
     } else {
-      showToast('All uploads failed', 'error');
+      showToast(`${successCount} baseline${successCount > 1 ? 's' : ''} uploaded`, 'success');
     }
 
     setUploadData({ testName: '', breakpoint: '1280px', files: [] });
@@ -143,7 +164,7 @@ export default function BaselineManager() {
   };
 
   // ── Preview navigation ────────────────────────────────
-  const navigatePreview = (direction) => {
+  const navigatePreview = useCallback((direction) => {
     if (!previewImage) return;
     const list = filteredBaselines.length > 0 ? filteredBaselines : baselines;
     const idx = list.findIndex(b => b.filename === previewImage.filename);
@@ -152,7 +173,7 @@ export default function BaselineManager() {
     if (next >= 0 && next < list.length) {
       setPreviewImage(list[next]);
     }
-  };
+  }, [previewImage, filteredBaselines, baselines]);
 
   // ── Keyboard support for preview modal ────────────────
   useEffect(() => {
@@ -164,7 +185,7 @@ export default function BaselineManager() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [previewImage, filteredBaselines]);
+  }, [previewImage, filteredBaselines, navigatePreview]);
 
   return (
     <div className="page-container page-container-wide">
@@ -200,36 +221,16 @@ export default function BaselineManager() {
 
       {/* Image Preview Modal */}
       {previewImage && (
-        <div className="modal-overlay" onClick={() => setPreviewImage(null)} style={{ zIndex: 1100 }}>
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: '#fff',
-              borderRadius: '12px',
-              width: '90vw',
-              maxWidth: '1000px',
-              maxHeight: '90vh',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.3)'
-            }}
-          >
+        <div className="modal-overlay baseline-preview-overlay" onClick={() => setPreviewImage(null)}>
+          <div className="baseline-preview-modal" onClick={e => e.stopPropagation()}>
             {/* Preview header */}
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '16px 24px',
-              borderBottom: '1px solid #e5e7eb',
-              background: '#f9fafb'
-            }}>
+            <div className="baseline-preview-header">
               <div>
-                <div style={{ fontWeight: '600', fontSize: '16px', color: '#111827' }}>
+                <div className="baseline-preview-title">
                   {previewImage.testName}
-                  <span style={{ color: '#6366f1', fontWeight: '500', marginLeft: '8px' }}>@ {previewImage.breakpoint}</span>
+                  <span className="baseline-preview-breakpoint">@ {previewImage.breakpoint}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '16px', marginTop: '4px', fontSize: '13px', color: '#6b7280' }}>
+                <div className="baseline-preview-meta">
                   <span>{previewImage.filename}</span>
                   <span>{formatSize(previewImage.sizeBytes)}</span>
                   <span>{formatDate(previewImage.modified)}</span>
@@ -237,16 +238,7 @@ export default function BaselineManager() {
               </div>
               <button
                 onClick={() => setPreviewImage(null)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '22px',
-                  cursor: 'pointer',
-                  color: '#6b7280',
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  lineHeight: 1
-                }}
+                className="baseline-preview-close"
                 title="Close (Esc)"
               >
                 ✕
@@ -254,27 +246,11 @@ export default function BaselineManager() {
             </div>
 
             {/* Preview body */}
-            <div style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '24px',
-              background: '#f3f4f6',
-              overflow: 'auto',
-              position: 'relative',
-              minHeight: '400px'
-            }}>
+            <div className="baseline-preview-body">
               {/* Nav arrows */}
               <button
                 onClick={() => navigatePreview(-1)}
-                style={{
-                  position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
-                  background: 'rgba(255,255,255,0.9)', border: '1px solid #d1d5db', borderRadius: '50%',
-                  width: '40px', height: '40px', cursor: 'pointer', fontSize: '18px',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 2
-                }}
+                className="baseline-preview-nav baseline-preview-nav-left"
                 title="Previous (←)"
               >
                 ‹
@@ -283,24 +259,12 @@ export default function BaselineManager() {
               <img
                 src={`/files/baselines/${previewImage.filename}?t=${previewImage.modified}`}
                 alt={previewImage.filename}
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: 'calc(90vh - 140px)',
-                  objectFit: 'contain',
-                  borderRadius: '4px',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
-                }}
+                className="baseline-preview-image"
               />
 
               <button
                 onClick={() => navigatePreview(1)}
-                style={{
-                  position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
-                  background: 'rgba(255,255,255,0.9)', border: '1px solid #d1d5db', borderRadius: '50%',
-                  width: '40px', height: '40px', cursor: 'pointer', fontSize: '18px',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 2
-                }}
+                className="baseline-preview-nav baseline-preview-nav-right"
                 title="Next (→)"
               >
                 ›
@@ -317,11 +281,11 @@ export default function BaselineManager() {
         </p>
       </div>
 
-      <div className="baseline-manager-layout" style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
+      <div className="baseline-manager-layout">
 
         {/* Upload Panel */}
-        <div className="config-card" style={{ flex: '0 0 350px', position: 'sticky', top: '20px' }}>
-          <h3 style={{ marginBottom: '20px', fontSize: '18px' }}>Upload New Baseline</h3>
+        <div className="config-card baseline-upload-panel">
+          <h3 className="baseline-upload-title">Upload New Baseline</h3>
 
           <form onSubmit={handleUploadSubmit}>
             <div className="form-group">
@@ -350,23 +314,9 @@ export default function BaselineManager() {
 
             {/* Auto-generated filename preview */}
             {expectedFilename && (
-              <div style={{
-                background: '#eef2ff',
-                border: '1px solid #c7d2fe',
-                borderRadius: '6px',
-                padding: '10px 14px',
-                marginBottom: '16px',
-                fontSize: '13px'
-              }}>
-                <span style={{ color: '#4338ca', fontWeight: '600' }}>File will be saved as:</span>
-                <code style={{
-                  display: 'block',
-                  marginTop: '4px',
-                  color: '#312e81',
-                  fontFamily: 'monospace',
-                  fontSize: '12px',
-                  wordBreak: 'break-all'
-                }}>
+              <div className="baseline-filename-preview">
+                <span className="baseline-filename-label">File will be saved as:</span>
+                <code className="baseline-filename-code">
                   {expectedFilename}
                 </code>
               </div>
@@ -374,15 +324,8 @@ export default function BaselineManager() {
 
             <div className="form-group">
               <label className="form-label">Reference Image (PNG / JPG)</label>
-              <div style={{
-                border: '2px dashed #d1d5db',
-                padding: '20px',
-                borderRadius: '8px',
-                textAlign: 'center',
-                background: '#f9fafb',
-                transition: 'border-color 0.2s'
-              }}>
-                <div style={{ marginBottom: '8px', fontSize: '28px' }}>📁</div>
+              <div className="baseline-dropzone">
+                <div className="baseline-dropzone-icon">📁</div>
                 <input
                   id="baseline-file-upload"
                   type="file"
@@ -390,21 +333,21 @@ export default function BaselineManager() {
                   multiple
                   onChange={e => setUploadData({ ...uploadData, files: Array.from(e.target.files) })}
                   required
-                  style={{ maxWidth: '100%', fontSize: '13px' }}
+                  className="baseline-file-input"
                 />
-                <div style={{ marginTop: '8px', fontSize: '12px', color: '#9ca3af' }}>
+                <div className="baseline-dropzone-help">
                   Select one or more PNG / JPG files
                 </div>
               </div>
 
               {/* Selected files preview */}
               {uploadData.files.length > 0 && (
-                <div style={{ marginTop: '10px', fontSize: '13px', color: '#374151' }}>
+                <div className="baseline-selected-files">
                   <strong>{uploadData.files.length}</strong> file{uploadData.files.length > 1 ? 's' : ''} selected:
-                  <ul style={{ margin: '6px 0 0 0', paddingLeft: '18px', listStyle: 'disc' }}>
+                  <ul className="baseline-selected-files-list">
                     {uploadData.files.map((f, i) => (
-                      <li key={i} style={{ marginBottom: '2px', wordBreak: 'break-all', color: '#6b7280' }}>
-                        {f.name} <span style={{ color: '#9ca3af' }}>({formatSize(f.size)})</span>
+                      <li key={i} className="baseline-selected-file-item">
+                        {f.name} <span className="baseline-selected-file-size">({formatSize(f.size)})</span>
                       </li>
                     ))}
                   </ul>
@@ -414,27 +357,18 @@ export default function BaselineManager() {
 
             {/* Upload progress */}
             {isUploading && uploadProgress.total > 1 && (
-              <div style={{ marginBottom: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>
+              <div className="baseline-upload-progress">
+                <div className="baseline-upload-progress-meta">
                   <span>Uploading...</span>
                   <span>{uploadProgress.current} / {uploadProgress.total}</span>
                 </div>
-                <div style={{ height: '4px', background: '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    background: '#6366f1',
-                    borderRadius: '2px',
-                    width: `${(uploadProgress.current / uploadProgress.total) * 100}%`,
-                    transition: 'width 0.3s ease'
-                  }} />
-                </div>
+                <progress className="baseline-upload-progress-bar" value={uploadProgress.current} max={uploadProgress.total} />
               </div>
             )}
 
             <button
               type="submit"
-              className={`btn-save ${isUploading ? 'saving' : ''}`}
-              style={{ width: '100%', marginTop: '12px' }}
+              className={`btn-save baseline-upload-submit ${isUploading ? 'saving' : ''}`}
               disabled={isUploading || !uploadData.testName || !uploadData.files.length}
             >
               {isUploading
@@ -445,121 +379,78 @@ export default function BaselineManager() {
         </div>
 
         {/* Gallery Panel */}
-        <div className="gallery-panel" style={{ flex: 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '16px', flexWrap: 'wrap' }}>
-            <h3 style={{ fontSize: '18px', color: '#1f2937', margin: 0 }}>Existing Baselines</h3>
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div className="gallery-panel baseline-gallery-panel">
+          <div className="baseline-gallery-header">
+            <h3 className="baseline-gallery-title">Existing Baselines</h3>
+            <div className="baseline-gallery-controls">
               <input
                 type="text"
                 className="form-input"
                 placeholder="Search baselines..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                style={{ width: '200px', height: '34px', fontSize: '13px' }}
+                className="baseline-search-input"
               />
-              <span style={{ fontSize: '14px', color: '#6b7280', background: '#f3f4f6', padding: '4px 12px', borderRadius: '20px', whiteSpace: 'nowrap' }}>
+              <span className="baseline-total-chip">
                 {filteredBaselines.length}{searchQuery ? ` / ${baselines.length}` : ''} total
               </span>
             </div>
           </div>
 
           {loading ? (
-            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-              {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ width: '250px', height: '200px', borderRadius: '8px' }} />)}
+            <div className="baseline-loading-grid">
+              {[1, 2, 3].map(i => <div key={i} className="skeleton baseline-loading-skeleton" />)}
             </div>
           ) : filteredBaselines.length === 0 ? (
-            <div className="test-list-empty" style={{ padding: '60px 0', border: '1px dashed #d1d5db', borderRadius: '12px', background: '#f9fafb' }}>
+            <div className="test-list-empty baseline-empty-state">
               <span className="test-list-empty-icon">🖼️</span>
               <span>{searchQuery ? 'No matching baselines' : 'No baselines found'}</span>
-              <span style={{ fontSize: '13px', color: '#9ca3af', marginTop: '8px' }}>
+              <span className="baseline-empty-help">
                 {searchQuery ? 'Try a different search term' : 'Upload a reference image to get started'}
               </span>
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+            <div className="baseline-grid">
               {filteredBaselines.map(img => (
                 <div
                   key={img.filename}
                   className="baseline-card"
-                  style={{
-                    background: '#fff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    transition: 'box-shadow 0.2s, transform 0.2s'
-                  }}
-                  onMouseOver={e => { e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                  onMouseOut={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none'; }}
                 >
                   {/* Thumbnail area — clickable for preview */}
                   <div
                     onClick={() => setPreviewImage(img)}
-                    style={{
-                      height: '180px',
-                      background: '#f8f9fa',
-                      padding: '10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderBottom: '1px solid #e5e7eb',
-                      cursor: 'pointer',
-                      position: 'relative'
-                    }}
+                    className="baseline-thumb"
                   >
                     <img
                       src={`/files/baselines/${img.filename}?t=${img.modified}`}
                       alt={img.filename}
-                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
+                      className="baseline-thumb-image"
                     />
                     {/* Hover overlay */}
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(0,0,0,0.03)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      opacity: 0,
-                      transition: 'opacity 0.2s'
-                    }}
-                      onMouseOver={e => e.currentTarget.style.opacity = 1}
-                      onMouseOut={e => e.currentTarget.style.opacity = 0}
-                    >
-                      <span style={{
-                        background: 'rgba(255,255,255,0.95)',
-                        padding: '6px 14px',
-                        borderRadius: '20px',
-                        fontSize: '13px',
-                        fontWeight: '600',
-                        color: '#4338ca',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                      }}>
+                    <div className="baseline-thumb-overlay">
+                      <span className="baseline-thumb-overlay-text">
                         Click to preview
                       </span>
                     </div>
                   </div>
 
                   {/* Metadata area */}
-                  <div style={{ padding: '16px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                      <div>
-                        <div style={{ fontWeight: '600', color: '#111827', fontSize: '15px', wordBreak: 'break-all', lineHeight: 1.3 }}>{img.testName}</div>
-                        <div style={{ fontSize: '13px', color: '#6366f1', fontWeight: '500', marginTop: '4px' }}>@ {img.breakpoint}</div>
+                  <div className="baseline-card-content">
+                    <div className="baseline-card-head">
+                      <div className="baseline-card-title-wrap">
+                        <div className="baseline-card-name">{img.testName}</div>
+                        <div className="baseline-card-breakpoint">@ {img.breakpoint}</div>
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); setDeleteConfirm(img.filename); }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', borderRadius: '4px', transition: 'background 0.2s', filter: 'grayscale(1)' }}
-                        onMouseOver={e => { e.currentTarget.style.filter = 'none'; e.currentTarget.style.background = '#fee2e2'; }}
-                        onMouseOut={e => { e.currentTarget.style.filter = 'grayscale(1)'; e.currentTarget.style.background = 'none'; }}
+                        className="baseline-delete-btn"
                         title="Delete baseline"
                       >
                         🗑️
                       </button>
                     </div>
 
-                    <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#6b7280', paddingTop: '12px', borderTop: '1px dashed #e5e7eb' }}>
+                    <div className="baseline-card-footer">
                       <span>{formatSize(img.sizeBytes)}</span>
                       <span>{formatDate(img.modified)}</span>
                     </div>

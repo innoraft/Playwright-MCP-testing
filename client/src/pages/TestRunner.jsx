@@ -15,6 +15,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const liveLayoutRef = useRef(null);
 
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
@@ -45,6 +46,13 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       }
     };
   }, []);
+
+  // ── Focus live monitor/output split when run starts ───
+  useEffect(() => {
+    if (status === 'running' && liveLayoutRef.current) {
+      liveLayoutRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [status]);
 
   // ── Connect to SSE ───────────────────────────────────
   const connectSSE = useCallback(() => {
@@ -105,7 +113,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       eventSourceRef.current = null;
       if (onRunningChange) onRunningChange(false);
     };
-  }, [onNavigateToReport, onRunningChange]);
+  }, [onNavigateToReport, onRunningChange, token]);
 
   // ── Run Test ──────────────────────────────────────────
   const handleRun = async () => {
@@ -142,7 +150,17 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
     try {
-      await authFetch('/api/runner/stop', { method: 'POST' });
+      const res = await authFetch('/api/runner/stop', { method: 'POST' });
+      let reportFile;
+
+      // Stop may or may not return a report path; navigate either way.
+      try {
+        const data = await res.json();
+        reportFile = data?.reportFile;
+      } catch {
+        reportFile = undefined;
+      }
+
       showToast('Test run stopped');
       setStatus('done');
       setResult('stopped');
@@ -151,6 +169,10 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
+      }
+
+      if (onNavigateToReport) {
+        onNavigateToReport(reportFile);
       }
     } catch {
       showToast('Failed to stop test', 'error');
@@ -190,9 +212,9 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
       {/* Run Controls */}
       <div className="config-card">
-        <div className="runner-controls">
+        <div className="runner-controls row">
           {/* Test Selector */}
-          <div className="runner-select-group">
+          <div className="runner-select-group col-10">
             <label className="form-label">
               <span className="form-label-icon">📋</span>
               Select Test
@@ -214,7 +236,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
           </div>
 
           {/* Action Buttons + Status */}
-          <div className="runner-actions">
+          <div className="runner-actions col-2">
             {status === 'running' ? (
               <button
                 className="btn-stop"
@@ -263,35 +285,40 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         </div>
       </div>
 
-      {/* Live Browser Monitor */}
-      <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} isPerformanceTest={isPerformanceTest} />
+      <div
+        className={`runner-live-split ${status === 'running' ? 'running' : ''}`}
+        ref={liveLayoutRef}
+      >
+        {/* Live Browser Monitor */}
+        <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} isPerformanceTest={isPerformanceTest} />
 
-      {/* Log Console */}
-      <div className="log-console-container">
-        <div className="log-console-header">
-          <span className="log-console-title">
-            <span className="log-console-dot"></span>
-            Live Output
-          </span>
-          <span className="log-console-count">
-            {logs.length} {logs.length === 1 ? 'line' : 'lines'}
-          </span>
-        </div>
-        <div className="log-console" id="log-console">
-          {logs.length === 0 ? (
-            <div className="log-empty">
-              <span className="log-empty-icon">📺</span>
-              <span>Select a test and click Run to see live output here…</span>
-            </div>
-          ) : (
-            logs.map((entry, i) => (
-              <div key={i} className={getLogClass(entry.type)}>
-                <span className="log-line-number">{i + 1}</span>
-                <span className="log-line-text">{entry.line}</span>
+        {/* Log Console */}
+        <div className="log-console-container">
+          <div className="log-console-header">
+            <span className="log-console-title">
+              <span className="log-console-dot"></span>
+              Live Output
+            </span>
+            <span className="log-console-count">
+              {logs.length} {logs.length === 1 ? 'line' : 'lines'}
+            </span>
+          </div>
+          <div className="log-console" id="log-console">
+            {logs.length === 0 ? (
+              <div className="log-empty">
+                <span className="log-empty-icon">📺</span>
+                <span>Select a test and click Run to see live output here…</span>
               </div>
-            ))
-          )}
-          <div ref={logEndRef} />
+            ) : (
+              logs.map((entry, i) => (
+                <div key={i} className={getLogClass(entry.type)}>
+                  <span className="log-line-number">{i + 1}</span>
+                  <span className="log-line-text">{entry.line}</span>
+                </div>
+              ))
+            )}
+            <div ref={logEndRef} />
+          </div>
         </div>
       </div>
     </div>

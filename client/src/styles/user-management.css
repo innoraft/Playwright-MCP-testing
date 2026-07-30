@@ -1,0 +1,42 @@
+.um-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  gap: 16px;
+}
+
+.um-user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.um-user-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.um-user-roles {
+  margin-right: 20px;
+}
+
+.um-user-roles, .um-user-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+

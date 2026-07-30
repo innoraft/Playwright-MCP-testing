@@ -203,7 +203,7 @@ export default function LLMConfig() {
                 style={{
                   fontSize: 13,
                   fontWeight: 500,
-                  color: 'var(--accent-primary-hover)',
+                  color: 'var(--hover-color)',
                 }}
               >
                 {getTemperatureLabel()}
@@ -237,13 +237,13 @@ export default function LLMConfig() {
 
         {/* Save */}
         <div className="save-section">
-          <span className="save-hint">Changes are saved to the platform configuration</span>
+          <span className="save-hint">**Changes are saved to the platform configuration</span>
           <button
             className={`btn-save ${saving ? 'saving' : ''}`}
             onClick={handleSave}
             disabled={saving}
           >
-            {saving ? 'Saving...' : 'Save Configuration'}
+            {saving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </div>

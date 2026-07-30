@@ -1,4 +1,20 @@
 import { useState } from 'react';
+import {
+  AlertTriangle,
+  BookOpen,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Globe,
+  Keyboard,
+  Lightbulb,
+  MessageSquare,
+  MousePointer2,
+  Package,
+  PenSquare,
+  X,
+  Zap,
+} from 'lucide-react';
 
 const STORAGE_KEY = 'pmcp_best_practices_seen';
 
@@ -6,7 +22,7 @@ const sections = [
   {
     id: 'nav',
     label: 'Navigation',
-    icon: '🌐',
+    icon: Globe,
     practices: [
       {
         title: 'Always use full URLs',
@@ -29,7 +45,7 @@ const sections = [
   {
     id: 'click',
     label: 'Clicking',
-    icon: '🖱️',
+    icon: MousePointer2,
     practices: [
       {
         title: 'Always specify the element type',
@@ -52,7 +68,7 @@ const sections = [
   {
     id: 'forms',
     label: 'Forms',
-    icon: '📝',
+    icon: PenSquare,
     practices: [
       {
         title: 'Declare the label attribute type for every field',
@@ -95,7 +111,7 @@ const sections = [
   {
     id: 'assert',
     label: 'Assertions',
-    icon: '✅',
+    icon: CheckCircle2,
     practices: [
       {
         title: 'Use clear assertion verbs',
@@ -128,7 +144,7 @@ const sections = [
   {
     id: 'interact',
     label: 'Scroll / Hover / Keys',
-    icon: '⌨️',
+    icon: Keyboard,
     practices: [
       {
         title: 'Scrolling — target + amount',
@@ -153,7 +169,7 @@ const sections = [
   {
     id: 'dialogs',
     label: 'Dialogs',
-    icon: '🪟',
+    icon: MessageSquare,
     practices: [
       {
         title: 'Native browser dialogs need special phrasing',
@@ -176,7 +192,7 @@ const sections = [
   {
     id: 'scope',
     label: 'Scoping',
-    icon: '📦',
+    icon: Package,
     practices: [
       {
         title: 'Scope clicks when multiple elements match',
@@ -251,7 +267,7 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
         <div className="bp-header">
           <div className="bp-header-left">
             <div className="bp-logo">
-              <span className="bp-logo-icon">📖</span>
+              <span className="bp-logo-icon"><BookOpen size={18} aria-hidden="true" /></span>
               <div>
                 <h2 className="bp-title">Writing Test Steps</h2>
                 <p className="bp-subtitle">Guidelines for clear, executable browser automation steps</p>
@@ -261,28 +277,28 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
           <div className="bp-header-right">
             <div className="bp-tabs">
               {[
-                { id: 'guide', label: 'Guide', icon: '📚' },
-                { id: 'patterns', label: 'Patterns', icon: '⚡' },
+                { id: 'guide', label: 'Guide', icon: BookOpen },
+                { id: 'patterns', label: 'Patterns', icon: Zap },
               ].map(t => (
                 <button
                   key={t.id}
                   className={`bp-tab ${activeTab === t.id ? 'bp-tab--active' : ''}`}
                   onClick={() => setActiveTab(t.id)}
                 >
-                  <span className="bp-tab-icon">{t.icon}</span>
+                  <span className="bp-tab-icon"><t.icon size={14} aria-hidden="true" /></span>
                   {t.label}
                 </button>
               ))}
             </div>
             <button className="bp-close" onClick={handleClose} title="Close">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
         </div>
 
         {/* ── Core principle banner ── */}
         <div className="bp-banner">
-          <span className="bp-banner-icon">💡</span>
+          <span className="bp-banner-icon"><Lightbulb size={16} aria-hidden="true" /></span>
           <span>
             You don't need to follow the examples word-for-word — just make sure each step has <strong>enough detail</strong> for the LLM to identify the right element and action <strong>without guessing</strong>.
           </span>
@@ -299,7 +315,7 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
                   className={`bp-nav-item ${activeSection === s.id ? 'bp-nav-item--active' : ''}`}
                   onClick={() => setActiveSection(s.id)}
                 >
-                  <span className="bp-nav-icon">{s.icon}</span>
+                  <span className="bp-nav-icon"><s.icon size={15} aria-hidden="true" /></span>
                   <span className="bp-nav-label">{s.label}</span>
                 </button>
               ))}
@@ -310,7 +326,7 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
               {currentSection && (
                 <div className="bp-section" key={currentSection.id}>
                   <div className="bp-section-header">
-                    <span className="bp-section-icon">{currentSection.icon}</span>
+                    <span className="bp-section-icon"><currentSection.icon size={18} aria-hidden="true" /></span>
                     <h3 className="bp-section-title">{currentSection.label}</h3>
                   </div>
 
@@ -324,7 +340,7 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
                           <div className="bp-card-head" onClick={() => toggleCard(cardKey)}>
                             <h4 className="bp-card-title">{p.title}</h4>
                             <span className={`bp-card-chevron ${isOpen ? 'bp-card-chevron--open' : ''}`}>
-                              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              <ChevronDown size={12} aria-hidden="true" />
                             </span>
                           </div>
                           <p className="bp-card-desc">{p.desc}</p>
@@ -332,8 +348,16 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
                           {isOpen && (
                             <div className="bp-card-body">
                               {p.note && <div className="bp-note">{p.note}</div>}
-                              {p.tip && <div className="bp-tip">💡 {p.tip}</div>}
-                              {p.warn && <div className="bp-warn">⚠️ {p.warn}</div>}
+                              {p.tip && (
+                                <div className="bp-tip">
+                                  <Lightbulb size={14} aria-hidden="true" /> {p.tip}
+                                </div>
+                              )}
+                              {p.warn && (
+                                <div className="bp-warn">
+                                  <AlertTriangle size={14} aria-hidden="true" /> {p.warn}
+                                </div>
+                              )}
 
                               {/* Columns (good/bad verbs) */}
                               {p.columns && (
@@ -374,13 +398,13 @@ export default function BestPracticesPopup({ manualOpen = false, onClose }) {
                                 <div className="bp-examples">
                                   {p.bad?.map((text, i) => (
                                     <div key={`b${i}`} className="bp-ex bp-ex--bad">
-                                      <span className="bp-ex-badge">✗</span>
+                                      <span className="bp-ex-badge"><X size={12} aria-hidden="true" /></span>
                                       <code>{text}</code>
                                     </div>
                                   ))}
                                   {p.good?.map((text, i) => (
                                     <div key={`g${i}`} className="bp-ex bp-ex--good">
-                                      <span className="bp-ex-badge">✓</span>
+                                      <span className="bp-ex-badge"><Check size={12} aria-hidden="true" /></span>
                                       <code>{text}</code>
                                     </div>
                                   ))}

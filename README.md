@@ -82,23 +82,28 @@ Take a screenshot of the dashboard
 
 ### Running Tests
 
-Execute a single test:
+Execute a general test:
 
 ```bash
-node ai_test_runner.js tests/simple-test.test.yml
+node ai_tool_runner.js tests/alert-test.test.yml
 ```
 
-Run all tests in a folder:
+Execute a visual regression test:
 
 ```bash
-node ai_test_runner.js tests/
+node ai_visual_runner.js tests/innoraft.test.yml
 ```
 
-When running a folder, the runner:
-- Discovers all `.yml` / `.yaml` files automatically
-- Executes them in alphabetical order
-- Prints a summary with total / passed / failed counts
-- Exits with code `1` if any test fails (CI-compatible)
+Execute a performance metrics test:
+
+```bash
+node ai_lighthouse_runner.js tests/inno_perf.test.yml
+```
+
+The server now auto-selects the correct runner by test type:
+- General tests use `ai_tool_runner.js`
+- Visual regression tests use `ai_visual_runner.js`
+- Performance tests use `ai_lighthouse_runner.js`
 
 ### Uploading media
 
@@ -308,7 +313,7 @@ The framework provides detailed error reporting:
 
 Enable verbose logging:
 ```bash
-DEBUG=true node ai_test_runner.js tests/my-test.test.yml
+DEBUG=true node ai_visual_runner.js tests/innoraft.test.yml
 ```
 
 ### Screenshot Analysis

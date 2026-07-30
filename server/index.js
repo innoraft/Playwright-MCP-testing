@@ -112,7 +112,8 @@ fs.mkdirSync(path.join(FILES_DIR, 'screenshots'), { recursive: true });
 
 // Helper: check if the current user has admin role
 function reqIsAdmin(req) {
-  return req.user && req.user.roles && req.user.roles.includes('admin');
+  if (!req.user || !Array.isArray(req.user.roles)) return false;
+  return req.user.roles.some((role) => String(role).toLowerCase() === 'admin');
 }
 
 // Setup multer for baseline uploads
@@ -470,6 +471,13 @@ app.post('/api/baselines/upload', requireAuth, upload.single('image'), (req, res
     const safeBreakpoint = breakpoint.replace(/[^a-zA-Z0-9_-]/g, '_');
     const filename = `${safeName}_${safeBreakpoint}.png`;
     const filePath = path.join(BASELINES_DIR, filename);
+
+    // Prevent silent overwrite: duplicate baseline names must be explicit.
+    if (fs.existsSync(filePath)) {
+      return res.status(409).json({
+        error: `A baseline file named "${filename}" already exists. Please change the test name or breakpoint (or rename the file) and try again.`
+      });
+    }
 
     fs.writeFileSync(filePath, req.file.buffer);
 
@@ -1077,9 +1085,10 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       if (state.reportFile) {
         setOwner('reports', state.reportFile, currentUserId);
       }
-      // Attribute any screenshots/diffs created during this run
+      // Attribute generated files created during this run.
+      // This includes screenshots/diffs and downloaded/uploaded assets.
       const runStart = state.startedAt || 0;
-      for (const subdir of ['screenshots', 'diffs']) {
+      for (const subdir of ['screenshots', 'diffs', 'uploads', 'Downloads', 'downloads']) {
         const dirPath = path.join(FILES_DIR, subdir);
         if (fs.existsSync(dirPath)) {
           const newFiles = fs.readdirSync(dirPath)
@@ -1093,6 +1102,20 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
             setOwner('files', `${subdir}/${f}`, currentUserId);
           }
         }
+      }
+
+      // Some tools can save downloads directly under /files root.
+      const rootFiles = fs.readdirSync(FILES_DIR, { withFileTypes: true })
+        .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
+        .filter(entry => {
+          try {
+            return fs.statSync(path.join(FILES_DIR, entry.name)).mtimeMs >= runStart;
+          } catch {
+            return false;
+          }
+        });
+      for (const entry of rootFiles) {
+        setOwner('files', entry.name, currentUserId);
       }
     }
 
@@ -1446,7 +1469,7 @@ app.delete('/api/reports', requireAuth, (req, res) => {
 //  FILES & ASSET BROWSER ENDPOINTS (EPIC-07)
 // ══════════════════════════════════════════════════════════
 
-const ALLOWED_ASSET_FOLDERS = ['screenshots', 'baselines', 'diffs', 'uploads'];
+const ALLOWED_ASSET_FOLDERS = ['screenshots', 'baselines', 'diffs', 'uploads', 'Downloads', 'downloads'];
 
 /**
  * Recursively read a directory and return a tree of files and folders.

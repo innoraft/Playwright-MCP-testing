@@ -1,13 +1,22 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  FileText,
+  FolderOpen,
+  Image as ImageIcon,
+  Plus,
+  SearchX,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
 import PerformanceMetricsForm from '../components/PerformanceMetricsForm';
 import { useAuth } from '../hooks/useAuth';
 
 const TABS = [
-  { id: 'general', label: 'General Test', icon: '📋' },
-  { id: 'visual', label: 'Visual Regression', icon: '🖼️' },
-  { id: 'performance', label: 'Performance Metrics', icon: '⚡' },
+  { id: 'general', label: 'General Test', icon: FileText },
+  { id: 'visual', label: 'Visual Regression', icon: ImageIcon },
+  { id: 'performance', label: 'Performance Metrics', icon: Zap },
 ];
 
 export default function TestSuites() {
@@ -21,11 +30,17 @@ export default function TestSuites() {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const toastTimerRef = useRef(null);
 
   // Form data for editing
   const [generalData, setGeneralData] = useState(null);
   const [vrData, setVrData] = useState(null);
   const [performanceData, setPerformanceData] = useState(null);
+  const tabToType = {
+    general: 'general',
+    visual: 'visual-regression',
+    performance: 'performance'
+  };
 
   const detectTestType = (content = '') => {
     const trimmed = content.trimStart().toLowerCase();
@@ -53,8 +68,22 @@ export default function TestSuites() {
 
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3500);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   // ── Load test list ────────────────────────────────────
@@ -69,7 +98,7 @@ export default function TestSuites() {
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, authFetch]);
 
   useEffect(() => {
     fetchTests();
@@ -284,6 +313,13 @@ export default function TestSuites() {
     setPerformanceData(null);
   };
 
+  const handleTabChange = (tabId) => {
+    setActiveTab(tabId);
+    if (selectedTest && selectedTest.type !== tabToType[tabId]) {
+      setSelectedTest(null);
+    }
+  };
+
   // ── Save handler (shared by all forms) ────────────────
   const handleSave = async (fileName, content) => {
     setSaving(true);
@@ -301,8 +337,27 @@ export default function TestSuites() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Save failed');
+        let message = 'Save failed';
+        try {
+          const raw = await res.text();
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed?.error) message = parsed.error;
+            } catch {
+              // Fallback for non-JSON error bodies
+              message = raw;
+            }
+          }
+        } catch {
+          // Keep default message.
+        }
+
+        if (res.status === 409 && (!message || message === 'Save failed')) {
+          message = 'A test with this name already exists. Please choose a different name.';
+        }
+
+        throw new Error(message);
       }
 
       const result = await res.json();
@@ -312,7 +367,8 @@ export default function TestSuites() {
       // Select the newly saved test
       setSelectedTest({ name: result.fileName, type: detectTestType(content) });
     } catch (err) {
-      showToast(err.message, 'error');
+      const message = err?.message || 'Save failed';
+      showToast(message, 'error');
     } finally {
       setSaving(false);
     }
@@ -343,8 +399,8 @@ export default function TestSuites() {
     <div className="page-container page-container-wide">
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast ${toast.type}`}>
+        <div className="report-toast-container" style={{ zIndex: 3000 }}>
+          <div className={`report-toast report-toast-${toast.type}`} role="alert" aria-live="polite">
             <span>{toast.type === 'success' ? '✓' : '✕'}</span>
             {toast.message}
           </div>
@@ -353,21 +409,18 @@ export default function TestSuites() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-icon">🗑️</span>
-              <h3>Delete Test</h3>
-            </div>
-            <p className="modal-text">
+        <div className="report-modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="report-modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3 className="report-modal-title">Delete Test</h3>
+            <p className="report-modal-text">
               Are you sure you want to delete <strong>{deleteConfirm}</strong>?
               This action cannot be undone.
             </p>
-            <div className="modal-actions">
-              <button className="btn-outline" onClick={() => setDeleteConfirm(null)}>
+            <div className="report-modal-actions">
+              <button className="report-btn-outline" onClick={() => setDeleteConfirm(null)}>
                 Cancel
               </button>
-              <button className="btn-danger" onClick={() => handleDelete(deleteConfirm)}>
+              <button className="report-btn-danger" onClick={() => handleDelete(deleteConfirm)}>
                 Delete
               </button>
             </div>
@@ -376,20 +429,17 @@ export default function TestSuites() {
       )}
 
       {confirmDeleteAll && (
-        <div className="modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-icon">🗑️</span>
-              <h3>Delete All Tests</h3>
-            </div>
-            <p className="modal-text">
+        <div className="report-modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
+          <div className="report-modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3 className="report-modal-title">Delete All Tests</h3>
+            <p className="report-modal-text">
               Are you sure you want to delete all visible tests? This action cannot be undone.
             </p>
-            <div className="modal-actions">
-              <button className="btn-outline" onClick={() => setConfirmDeleteAll(false)}>
+            <div className="report-modal-actions">
+              <button className="report-btn-outline" onClick={() => setConfirmDeleteAll(false)}>
                 Cancel
               </button>
-              <button className="btn-danger" onClick={handleDeleteAll}>
+              <button className="report-btn-danger" onClick={handleDeleteAll}>
                 Delete All Tests
               </button>
             </div>
@@ -413,7 +463,7 @@ export default function TestSuites() {
             <span className="test-list-title">Saved Tests</span>
             <div className="test-list-header-actions">
               <button className="btn-new-test" onClick={handleNewTest} title="Create new test">
-                ＋
+                <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
               </button>
               <button
                 className="btn-danger btn-delete-all"
@@ -422,7 +472,7 @@ export default function TestSuites() {
                 disabled={tests.length === 0}
                 aria-label="Delete all tests"
               >
-                🗑️
+                <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -454,12 +504,12 @@ export default function TestSuites() {
             </div>
           ) : tests.length === 0 ? (
             <div className="test-list-empty">
-              <span className="test-list-empty-icon">📂</span>
+              <span className="test-list-empty-icon"><FolderOpen size={28} strokeWidth={2} aria-hidden="true" /></span>
               <span>No tests yet</span>
             </div>
           ) : filteredTests.length === 0 ? (
             <div className="test-list-empty">
-              <span className="test-list-empty-icon">🔎</span>
+              <span className="test-list-empty-icon"><SearchX size={28} strokeWidth={2} aria-hidden="true" /></span>
               <span>No matching tests</span>
             </div>
           ) : (
@@ -472,7 +522,13 @@ export default function TestSuites() {
                 >
                   <div className="test-list-item-info">
                     <span className="test-list-item-icon">
-                      {test.type === 'visual-regression' ? '🖼️' : test.type === 'performance' ? '⚡' : '📋'}
+                      {test.type === 'visual-regression' ? (
+                        <ImageIcon size={16} strokeWidth={2} aria-hidden="true" />
+                      ) : test.type === 'performance' ? (
+                        <Zap size={16} strokeWidth={2} aria-hidden="true" />
+                      ) : (
+                        <FileText size={16} strokeWidth={2} aria-hidden="true" />
+                      )}
                     </span>
                     <div className="test-list-item-text">
                       <span className="test-list-item-name" title={test.name}>
@@ -488,7 +544,7 @@ export default function TestSuites() {
                     }}
                     title="Delete test"
                   >
-                    🗑️
+                    <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -498,26 +554,31 @@ export default function TestSuites() {
 
         {/* Right Panel — Tabs + Form */}
         <div className="test-form-panel">
+          <div className="tabs-dropdown-wrap">
+            <label className="tabs-dropdown-label" htmlFor="testsuite-tab-select">Test Type</label>
+            <select
+              id="testsuite-tab-select"
+              className="form-select tabs-dropdown"
+              value={activeTab}
+              onChange={(e) => handleTabChange(e.target.value)}
+            >
+              {TABS.map((tab) => (
+                <option key={tab.id} value={tab.id}>{tab.label}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Tabs */}
           <div className="tabs-container">
             {TABS.map(tab => {
-              const tabToType = {
-                general: 'general',
-                visual: 'visual-regression',
-                performance: 'performance'
-              };
+              const Icon = tab.icon;
               return (
                 <button
                   key={tab.id}
                   className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveTab(tab.id);
-                    if (selectedTest && selectedTest.type !== tabToType[tab.id]) {
-                      setSelectedTest(null);
-                    }
-                  }}
+                  onClick={() => handleTabChange(tab.id)}
                 >
-                  <span className="tab-btn-icon">{tab.icon}</span>
+                  <span className="tab-btn-icon"><Icon size={16} strokeWidth={2} aria-hidden="true" /></span>
                   {tab.label}
                 </button>
               );
