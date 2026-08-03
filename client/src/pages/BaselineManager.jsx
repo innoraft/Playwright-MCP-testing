@@ -385,13 +385,12 @@ export default function BaselineManager() {
             <div className="baseline-gallery-controls">
               <input
                 type="text"
-                className="form-input"
                 placeholder="Search baselines..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="baseline-search-input"
               />
-              <span className="baseline-total-chip">
+              <span className="form-input baseline-total-chip">
                 {filteredBaselines.length}{searchQuery ? ` / ${baselines.length}` : ''} total
               </span>
             </div>
