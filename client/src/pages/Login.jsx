@@ -66,14 +66,14 @@ export default function Login() {
   };
 
   return (
-    <div className="login-wrapper">
+    <div className="login-wrapper container">
       <div className="login-card">
         <div className="login-header">
           <div className="login-logo">
-            <div className="sidebar-logo-icon" style={{ width: 48, height: 48, fontSize: 24 }}>⚡</div>
+            <div className="sidebar-logo-icon text-center" style={{ width: 48, height: 48, fontSize: 24 }}>⚡</div>
           </div>
-          <h1 className="login-title">AI testing</h1>
-          <p className="login-subtitle">
+          <h1 className="login-title text-center">AI testing</h1>
+          <p className="login-subtitle text-center">
             {view === 'login' && 'Sign in to your account'}
             {view === 'forgot' && 'Request a password reset'}
           </p>

@@ -43,7 +43,7 @@ const stepResultSchema = z.object({
   stepNumber: z.number().describe("The step number (e.g. 1, 2, 3)"),
   stepText: z.string().describe("The original step text from the test plan"),
   status: z.enum(["passed", "failed"]),
-  reason: z.string().max(30).optional().describe("For passed steps: omit or keep to <10 words. For failed steps: concise root cause, max 30 chars."),
+  reason: z.string().optional().describe("Concise root cause or outcome summary. Keep it brief when possible within 30 words and omit for passed steps"),
   screenshotTaken: z
     .boolean()
     .describe("Whether a screenshot was taken for this step (should be true on failure)"),

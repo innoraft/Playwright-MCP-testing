@@ -1,0 +1,279 @@
+.page-container {
+  padding: 36px 24px;
+}
+
+.page-subtitle {
+  font-size: 14px;
+}
+
+.config-card {
+  border: 1px solid var(--section-border);
+  background-color: var(--section-bg);
+  padding: 30px;
+  border-radius: 20px;
+  margin-top: 30px;
+}
+
+/* form stylings */
+
+.form-group {
+  margin-bottom: 1.75rem;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-label);
+  margin-left: 2px;
+}
+
+.form-label-hint {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Input Wrapper */
+
+.form-input-wrapper {
+  position: relative;
+}
+
+/* Input & Select */
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  height: 52px;
+  padding: 0 18px;
+  border: none;
+  outline: none;
+  border-radius: 14px;
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-size: 15px;
+  transition: all var(--transition-fast);
+  border: 1px solid var(--input-border);
+}
+
+/* Placeholder */
+
+.form-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+/* Hover */
+
+.form-input:hover,
+.form-select:hover,
+.form-textarea:hover {
+  border-color: var(--input-border-hover);
+}
+
+/* Focus */
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  border-color: var(--input-border-focus);
+}
+
+.form-select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 48px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%23e3b7ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='2 5 7 10 12 5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 18px center;
+}
+
+.form-select option {
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.save-hint {
+  font-size: 14px;
+}
+
+.form-textarea {
+  padding: 22px;
+  min-height: 200px;
+}
+
+.form-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.form-textarea-lg {
+  font-family: "Fira Code", "SF Mono", "Cascadia Code", monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  min-height: 360px;
+}
+
+.form-error-text {
+  display: block;
+  font-size: 12px;
+  color: var(--error);
+  margin-top: 6px;
+  font-weight: 500;
+}
+
+.form-input-error {
+  border-color: var(--error) !important;
+}
+
+.field-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.field-group-number {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hover-color);
+  background: var(--accent-glow);
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.btn-remove-group {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 4px;
+  color: var(--error);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  opacity: 0.6;
+}
+
+.btn-remove-group:hover {
+  opacity: 1;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* ── Form Utils ────────────────────────────────────── */
+.form-required {
+  color: var(--error);
+  margin-left: 2px;
+}
+
+.form-label-sm {
+  font-size: 12px;
+}
+
+.form-input-error {
+  border-color: var(--error) !important;
+}
+
+.form-error-text {
+  display: block;
+  font-size: 12px;
+  color: var(--error);
+  margin-top: 6px;
+  font-weight: 500;
+}
+
+/* Eye Button */
+
+.toggle-visibility-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.toggle-visibility-btn:hover {
+  background: var(--accent-fade);
+}
+
+.save-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.btn-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: 190px;
+  height: 48px;
+  padding: 0 24px;
+  border: 1px solid var(--btn-save-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--btn-save-bg-start), var(--btn-save-bg-end));
+  color: var(--btn-save-text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: var(--btn-save-shadow);
+}
+
+.btn-add {
+  width: 100%;
+  padding: 12px;
+  background: none;
+  border: 2px dashed var(--border-secondary);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn-add:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-hover);
+  background: var(--accent-glow);
+}
+
+.btn-save:hover {
+  border-color: var(--btn-save-hover-border);
+  color: var(--btn-save-hover-text);
+  box-shadow: var(--btn-save-hover-shadow);
+}
+
+.btn-save:active {
+  transform: translateY(1px);
+  box-shadow: var(--btn-save-shadow);
+}
+
+.btn-save:disabled,
+.btn-save.saving {
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none;
+}

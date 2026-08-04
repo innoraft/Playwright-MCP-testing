@@ -88,7 +88,16 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
         body: formData
       });
 
-      if (!res.ok) throw new Error('Upload failed');
+      if (!res.ok) {
+        let message = 'Upload failed';
+        try {
+          const err = await res.json();
+          if (err?.error) message = err.error;
+        } catch {
+          // Keep default message.
+        }
+        throw new Error(message);
+      }
       const data = await res.json();
 
       setBaselines(prev => ({
@@ -100,7 +109,7 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
       }));
     } catch (err) {
       console.error(err);
-      alert('Failed to upload baseline');
+      alert(err.message || 'Failed to upload baseline');
     } finally {
       setUploading(false);
     }
@@ -144,44 +153,45 @@ export default function VisualRegressionForm({ initialData, onSave, saving }) {
 
   return (
     <div className="test-form">
-      {/* Test Name */}
-      <div className="form-group">
-        <label className="form-label" htmlFor="vr-test-name">
-          Test Name <span className="form-required">*</span>
-        </label>
-        <input
-          id="vr-test-name"
-          className={`form-input ${errors.testName ? 'form-input-error' : ''}`}
-          type="text"
-          placeholder="e.g. Visual Regression Test"
-          value={testName}
-          onChange={(e) => {
-            setTestName(e.target.value);
-            setErrors(prev => { const n = { ...prev }; delete n.testName; return n; });
-          }}
-        />
-        {errors.testName && <span className="form-error-text">{errors.testName}</span>}
-      </div>
+      <div className="row">
+        {/* Test Name */}
+        <div className="form-group col-6">
+          <label className="form-label" htmlFor="vr-test-name">
+            Test Name <span className="form-required">*</span>
+          </label>
+          <input
+            id="vr-test-name"
+            className={`form-input ${errors.testName ? 'form-input-error' : ''}`}
+            type="text"
+            placeholder="e.g. Visual Regression Test"
+            value={testName}
+            onChange={(e) => {
+              setTestName(e.target.value);
+              setErrors(prev => { const n = { ...prev }; delete n.testName; return n; });
+            }}
+          />
+          {errors.testName && <span className="form-error-text">{errors.testName}</span>}
+        </div>
 
-      {/* URL */}
-      <div className="form-group">
-        <label className="form-label" htmlFor="vr-url">
-          Target URL <span className="form-required">*</span>
-        </label>
-        <input
-          id="vr-url"
-          className={`form-input ${errors.url ? 'form-input-error' : ''}`}
-          type="url"
-          placeholder="https://example.com"
-          value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
-            setErrors(prev => { const n = { ...prev }; delete n.url; return n; });
-          }}
-        />
-        {errors.url && <span className="form-error-text">{errors.url}</span>}
+        {/* URL */}
+        <div className="form-group col-6">
+          <label className="form-label" htmlFor="vr-url">
+            Target URL <span className="form-required">*</span>
+          </label>
+          <input
+            id="vr-url"
+            className={`form-input ${errors.url ? 'form-input-error' : ''}`}
+            type="url"
+            placeholder="https://example.com"
+            value={url}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setErrors(prev => { const n = { ...prev }; delete n.url; return n; });
+            }}
+          />
+          {errors.url && <span className="form-error-text">{errors.url}</span>}
+        </div>
       </div>
-
       {/* Sensitivity Controls */}
       <div className="form-row" style={{ display: 'flex', gap: '20px', marginTop: '16px' }}>
         <div className="form-group" style={{ flex: 1 }}>

@@ -12,21 +12,20 @@
   gap: 10px;
   padding: 12px 14px;
   border-radius: 10px;
-  border: 2px solid var(--border, #334155);
-  background: var(--surface2, #1e293b);
+  border: 1px solid var(--hover-color);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
   user-select: none;
 }
 
 .perf-category-card--checked {
-  border-color: var(--accent, #7c3aed);
-  background: var(--accent-subtle, rgba(124, 58, 237, 0.12));
+  border-color: var(--input-border-hover);
+  background: var(--accent-fade);
 }
 
 .perf-category-card__checkbox {
   margin-top: 2px;
-  accent-color: var(--accent, #7c3aed);
+  /* accent-color: var(--accent, #7c3aed); */
   flex-shrink: 0;
 }
 

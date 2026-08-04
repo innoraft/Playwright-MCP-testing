@@ -176,7 +176,7 @@ export default function UserManagement() {
   };
 
   return (
-    <div className="page-container" style={{ maxWidth: '900px' }}>
+    <div className="page-container">
       <div className="page-header">
         <h1 className="page-title">User Management</h1>
         <p className="page-subtitle">Create, edit, and manage user accounts and role assignments</p>
@@ -190,12 +190,12 @@ export default function UserManagement() {
       )}
 
       {/* Actions Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+      <div className='row my-3'>
+        <span className='col-4'>
           {users.length} user{users.length !== 1 ? 's' : ''} registered
         </span>
         <button
-          className="btn btn-primary"
+          className="btn-save col-4"
           onClick={() => {
             resetForm();
             setShowCreateForm(true);
@@ -227,13 +227,13 @@ export default function UserManagement() {
                 </div>
                 <div className="um-user-actions">
                   <button
-                    className="btn btn-primary btn-sm"
+                    className="btn btn-sm btn-save"
                     onClick={() => { setResetModal({ userId: req.id, username: req.username }); setResetPassword(''); }}
                   >
                     🔒 Set New Password
                   </button>
                   <button
-                    className="btn btn-secondary btn-sm"
+                    className="btn btn-secondary btn-danger"
                     onClick={() => handleDismissReset(req.id)}
                   >
                     ✕ Dismiss
@@ -267,8 +267,8 @@ export default function UserManagement() {
                 />
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-                <button type="submit" className="btn btn-primary">Set Password</button>
-                <button type="button" className="btn btn-secondary" onClick={() => setResetModal(null)}>Cancel</button>
+                <button type="submit" className="btn btn-save">Set Password</button>
+                <button type="button" className="btn btn-danger" onClick={() => setResetModal(null)}>Cancel</button>
               </div>
             </form>
           </div>
@@ -341,10 +341,10 @@ export default function UserManagement() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-              <button type="submit" className="btn btn-primary">
+              <button type="submit" className="btn btn-save">
                 {editingUser ? 'Save Changes' : 'Create User'}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={resetForm}>
+              <button type="button" className="btn btn-danger" onClick={resetForm}>
                 Cancel
               </button>
             </div>

@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import LiveMonitor from '../components/LiveMonitor';
+import { TEST_RUNNER_UI } from '../constants/testRunnerUi';
 
 export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const { authFetch, token } = useAuth();
@@ -12,9 +13,14 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const [toast, setToast] = useState(null);
   const [screencastFrame, setScreencastFrame] = useState(null);
   const [isPerformanceTest, setIsPerformanceTest] = useState(false);
+  const [animeActive, setAnimeActive] = useState(false);
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const liveLayoutRef = useRef(null);
+  const runActivityRef = useRef(null);
+  const showAnimation = TEST_RUNNER_UI.animation;
+  const showTerminalOutput = TEST_RUNNER_UI.terminalOutput;
 
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
@@ -30,12 +36,13 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       .catch(() => showToast('Could not load test files', 'error'));
   }, [showToast, authFetch]);
 
-  // ── Auto-scroll logs ─────────────────────────────────
+  // ── Auto-scroll developer logs when enabled ──────────
   useEffect(() => {
+    if (!showTerminalOutput) return;
     if (logEndRef.current) {
       logEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs]);
+  }, [logs, showTerminalOutput]);
 
   // ── Cleanup SSE on unmount ────────────────────────────
   useEffect(() => {
@@ -45,6 +52,101 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       }
     };
   }, []);
+
+  // ── Focus live monitor/output split when run starts ───
+  useEffect(() => {
+    if (status === 'running' && liveLayoutRef.current) {
+      liveLayoutRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [status]);
+
+  // ── Anime.js motion for run-activity panel ───────────
+  useEffect(() => {
+    let isMounted = true;
+    let ringRotateAnimation;
+    let corePulseAnimation;
+    let completionAnimation;
+
+    const loadAnimation = async () => {
+      if (!runActivityRef.current || !showAnimation) return;
+      setAnimeActive(false);
+
+      try {
+        const animeModuleName = 'animejs';
+        const animeImport = await import(/* @vite-ignore */ animeModuleName);
+        if (!isMounted) return;
+
+        const anime = animeImport.default || animeImport;
+        const rings = runActivityRef.current.querySelectorAll('.run-activity-loader-ring');
+        const core = runActivityRef.current.querySelector('.run-activity-loader-core');
+
+        if (status === 'running') {
+          setAnimeActive(true);
+
+          ringRotateAnimation = anime({
+            targets: rings,
+            rotate: 360,
+            easing: 'linear',
+            duration: 2800,
+            delay: anime.stagger(160),
+            loop: true
+          });
+
+          corePulseAnimation = anime({
+            targets: core,
+            scale: [1, 1.08],
+            easing: 'easeInOutSine',
+            direction: 'alternate',
+            duration: 820,
+            loop: true
+          });
+
+        }
+
+        if (status === 'done') {
+          completionAnimation = anime({
+            targets: runActivityRef.current,
+            scale: [0.98, 1],
+            opacity: [0.7, 1],
+            easing: 'easeOutQuad',
+            duration: 420
+          });
+        }
+      } catch {
+        // Keep CSS-only fallback when anime.js is unavailable.
+      }
+    };
+
+    loadAnimation();
+
+    return () => {
+      isMounted = false;
+      setAnimeActive(false);
+      [ringRotateAnimation, corePulseAnimation, completionAnimation].forEach((animation) => {
+        if (animation?.pause) animation.pause();
+      });
+    };
+  }, [status, showAnimation]);
+
+
+
+  const runStateLabel = useMemo(() => {
+    if (status === 'running') return 'Active';
+    if (status === 'done' && result === 'passed') return 'Passed';
+    if (status === 'done' && result === 'stopped') return 'Stopped';
+    if (status === 'done') return 'Failed';
+    return 'Idle';
+  }, [status, result]);
+
+  const getLogClass = (type) => {
+    switch (type) {
+      case 'pass': return 'log-line log-pass';
+      case 'fail': return 'log-line log-fail';
+      case 'llm': return 'log-line log-llm';
+      case 'step': return 'log-line log-step';
+      default: return 'log-line';
+    }
+  };
 
   // ── Connect to SSE ───────────────────────────────────
   const connectSSE = useCallback(() => {
@@ -105,7 +207,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       eventSourceRef.current = null;
       if (onRunningChange) onRunningChange(false);
     };
-  }, [onNavigateToReport, onRunningChange]);
+  }, [onNavigateToReport, onRunningChange, token]);
 
   // ── Run Test ──────────────────────────────────────────
   const handleRun = async () => {
@@ -130,7 +232,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         throw new Error(err.error || 'Failed to start test');
       }
 
-      // Connect to SSE for live logs
+      // Connect to SSE for live logs/events
       connectSSE();
     } catch (err) {
       showToast(err.message, 'error');
@@ -142,7 +244,17 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
     try {
-      await authFetch('/api/runner/stop', { method: 'POST' });
+      const res = await authFetch('/api/runner/stop', { method: 'POST' });
+      let reportFile;
+
+      // Stop may or may not return a report path; navigate either way.
+      try {
+        const data = await res.json();
+        reportFile = data?.reportFile;
+      } catch {
+        reportFile = undefined;
+      }
+
       showToast('Test run stopped');
       setStatus('done');
       setResult('stopped');
@@ -152,19 +264,12 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
+
+      if (onNavigateToReport) {
+        onNavigateToReport(reportFile);
+      }
     } catch {
       showToast('Failed to stop test', 'error');
-    }
-  };
-
-  // ── Get log line class ────────────────────────────────
-  const getLogClass = (type) => {
-    switch (type) {
-      case 'pass': return 'log-line log-pass';
-      case 'fail': return 'log-line log-fail';
-      case 'llm': return 'log-line log-llm';
-      case 'step': return 'log-line log-step';
-      default: return 'log-line';
     }
   };
 
@@ -184,15 +289,15 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       <div className="page-header">
         <h1 className="page-title">Test Runner</h1>
         <p className="page-subtitle">
-          Execute tests and monitor their progress in real time with live log streaming.
+          Execute tests and monitor progress in real time through live visual activity signals.
         </p>
       </div>
 
       {/* Run Controls */}
       <div className="config-card">
-        <div className="runner-controls">
+        <div className="runner-controls row">
           {/* Test Selector */}
-          <div className="runner-select-group">
+          <div className="runner-select-group col-10">
             <label className="form-label">
               <span className="form-label-icon">📋</span>
               Select Test
@@ -214,7 +319,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
           </div>
 
           {/* Action Buttons + Status */}
-          <div className="runner-actions">
+          <div className="runner-actions col-2">
             {status === 'running' ? (
               <button
                 className="btn-stop"
@@ -238,11 +343,19 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
             {/* Status Badge */}
             {result && status === 'done' && (
-              <div className={`status-badge ${result}`} id="status-badge">
+              <div
+                className={`status-badge ${result === 'passed' ? 'passed' : result === 'stopped' ? 'stopped' : 'failed'}`}
+                id="status-badge"
+              >
                 {result === 'passed' ? (
                   <>
                     <span className="status-badge-icon">✅</span>
                     All Tests Passed
+                  </>
+                ) : result === 'stopped' ? (
+                  <>
+                    <span className="status-badge-icon">⏸</span>
+                    Test Run Stopped
                   </>
                 ) : (
                   <>
@@ -263,36 +376,97 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         </div>
       </div>
 
-      {/* Live Browser Monitor */}
-      <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} isPerformanceTest={isPerformanceTest} />
+      <div
+        className={`runner-live-split ${status === 'running' ? 'running' : ''} ${showAnimation ? 'show-animation' : ''} ${showTerminalOutput ? 'show-terminal' : ''}`}
+        ref={liveLayoutRef}
+      >
+        {/* Live Browser Monitor */}
+        <LiveMonitor frame={screencastFrame} isRunning={status === 'running'} isPerformanceTest={isPerformanceTest} />
 
-      {/* Log Console */}
-      <div className="log-console-container">
-        <div className="log-console-header">
-          <span className="log-console-title">
-            <span className="log-console-dot"></span>
-            Live Output
-          </span>
-          <span className="log-console-count">
-            {logs.length} {logs.length === 1 ? 'line' : 'lines'}
-          </span>
-        </div>
-        <div className="log-console" id="log-console">
-          {logs.length === 0 ? (
-            <div className="log-empty">
-              <span className="log-empty-icon">📺</span>
-              <span>Select a test and click Run to see live output here…</span>
+        {/* Live Run Activity */}
+        {showAnimation && (
+          <div
+            className={`run-activity-container ${status === 'running' ? 'is-running' : ''} ${status === 'done' ? 'is-done' : ''} ${status === 'done' && result ? `result-${result}` : ''} ${animeActive ? 'anime-active' : ''}`}
+            ref={runActivityRef}
+          >
+            <div className="run-activity-header">
+              <span className="run-activity-title">
+                <span className="run-activity-dot"></span>
+                Test Execution Pulse
+              </span>
+              <span className={`run-activity-state ${status} ${result || ''}`}>
+                {runStateLabel}
+              </span>
             </div>
-          ) : (
-            logs.map((entry, i) => (
-              <div key={i} className={getLogClass(entry.type)}>
-                <span className="log-line-number">{i + 1}</span>
-                <span className="log-line-text">{entry.line}</span>
+
+            <div className="run-activity-surface">
+              <div className="run-activity-hero" aria-hidden="true">
+                <div className="run-activity-loader-wrap">
+                  <div className="run-activity-loader-ring run-activity-loader-ring-a"></div>
+                  <div className="run-activity-loader-ring run-activity-loader-ring-b"></div>
+                  <div className="run-activity-loader-ring run-activity-loader-ring-c"></div>
+                  <div className="run-activity-loader-core">
+                    {status === 'running' ? 'RUN' : status === 'done' ? 'END' : 'IDLE'}
+                  </div>
+                </div>
+
+                <div className="run-activity-graph">
+                  {[22, 48, 72, 88, 58, 94, 76, 50, 82, 66, 38, 80, 56, 90, 44, 70, 30, 82, 54, 42].map((peak, i) => (
+                    <span
+                      key={i}
+                      className="run-activity-graph-bar"
+                      style={{ '--peak': `${peak}%`, '--delay': `${(i * 0.055).toFixed(3)}s` }}
+                    />
+                  ))}
+                </div>
               </div>
-            ))
-          )}
-          <div ref={logEndRef} />
-        </div>
+            </div>
+          </div>
+        )}
+
+        {/* Terminal Output (Developer mode) */}
+        {showTerminalOutput && (
+          <div className="log-console-container">
+            <div className="log-console-header">
+              <span className="log-console-title">
+                <span className="log-console-dot"></span>
+                Terminal Output
+              </span>
+              <span className="log-console-count">
+                {logs.length} {logs.length === 1 ? 'line' : 'lines'}
+              </span>
+            </div>
+            <div className="log-console" id="log-console">
+              {logs.length === 0 ? (
+                <div className="log-empty">
+                  <span className="log-empty-icon">📺</span>
+                  <span>Developer output will appear here during run.</span>
+                </div>
+              ) : (
+                logs.map((entry, i) => (
+                  <div key={i} className={getLogClass(entry.type)}>
+                    <span className="log-line-number">{i + 1}</span>
+                    <span className="log-line-text">{entry.line}</span>
+                  </div>
+                ))
+              )}
+              <div ref={logEndRef} />
+            </div>
+          </div>
+        )}
+
+        {!showAnimation && !showTerminalOutput && (
+          <div className="run-mode-empty">
+            <h4>Run panel disabled</h4>
+            <p>
+              Enable at least one mode in
+              {' '}
+              <strong>client/src/constants/testRunnerUi.js</strong>
+              {' '}
+              by setting animation or terminalOutput to true.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

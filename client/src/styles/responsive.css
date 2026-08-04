@@ -1,0 +1,341 @@
+/* Global responsive overrides */
+
+img,
+video,
+iframe {
+  max-width: 100%;
+}
+
+@media (max-width: 1280px) {
+  .topbar-actions {
+    gap: 12px;
+  }
+
+  .topbar-cta {
+    padding: 6px 16px;
+  }
+
+  .sidebar {
+    width: 260px;
+    padding-right: 16px;
+  }
+
+  .test-list-panel,
+  .report-list-panel {
+    width: 280px;
+    min-width: 280px;
+  }
+
+  .fb-list-panel {
+    width: 360px;
+    min-width: 360px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .main-wrapper {
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .main-content {
+    width: 100%;
+  }
+
+  .page-container {
+    padding: 26px 18px;
+  }
+
+  .config-card {
+    margin-top: 20px;
+    padding: 22px;
+  }
+
+  .test-suites-layout,
+  .reports-layout,
+  .fb-layout {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .test-list-panel,
+  .report-list-panel,
+  .fb-list-panel {
+    position: static;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .test-list,
+  .report-list,
+  .fb-file-list {
+    max-height: 420px;
+  }
+
+  .report-viewer-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .report-viewer-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .fb-preview-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .fb-preview-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .runner-controls.row,
+  .test-form .row,
+  .page-container .row {
+    row-gap: 12px;
+  }
+
+  .runner-controls.row > [class*='col-'],
+  .test-form .row > [class*='col-'] {
+    width: 100%;
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .save-section {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-topbar {
+    padding-block: 10px;
+  }
+
+  .topbar-inner {
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  .topbar-brand-wrap {
+    width: 100%;
+  }
+
+  .topbar-brand-title {
+    font-size: 15px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .topbar-cta {
+    height: 38px;
+    padding: 5px 12px;
+    font-size: 12px;
+  }
+
+  .topbar-icon-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .topbar-user-name {
+    max-width: 90px;
+    font-size: 12px;
+  }
+
+  .sidebar {
+    padding: 8px 0 10px;
+  }
+
+  .sidebar-group-label {
+    margin-bottom: 4px;
+    font-size: 10px;
+  }
+
+  .sidebar .topbar-nav {
+    padding-bottom: 6px;
+  }
+
+  .sidebar .topnav-link {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .sidebar-helper-card {
+    margin: 8px 10px 0;
+    padding: 12px;
+  }
+
+  .page-container {
+    padding: 18px 12px;
+  }
+
+  .page-title {
+    font-size: 1.9rem;
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+  }
+
+  .config-card {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .form-input,
+  .form-select,
+  .form-textarea {
+    font-size: 14px;
+  }
+
+  .form-input,
+  .form-select {
+    height: 46px;
+  }
+
+  .form-textarea {
+    min-height: 160px;
+    padding: 14px;
+  }
+
+  .tabs-container {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .tab-btn {
+    flex: 0 0 auto;
+    min-width: 150px;
+    font-size: 12px;
+  }
+
+  .test-list-header,
+  .report-list-header,
+  .fb-breadcrumbs,
+  .fb-controls,
+  .fb-preview-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .report-iframe {
+    height: 58vh;
+  }
+
+  .report-viewer-empty,
+  .fb-preview-empty {
+    padding: 46px 20px;
+  }
+
+  .fb-preview-body {
+    min-height: 280px;
+  }
+
+  .toast-container,
+  .report-toast-container {
+    left: 10px;
+    right: 10px;
+    top: 10px;
+    width: auto;
+  }
+
+  .toast,
+  .report-toast,
+  .fb-toast {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .fb-toast {
+    left: 10px;
+    right: 10px;
+    top: 10px;
+  }
+
+  .page-container .row.my-3 > .col-4 {
+    width: 100%;
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+
+  .um-user-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .um-user-roles,
+  .um-user-actions {
+    width: 100%;
+    margin-right: 0;
+    flex-wrap: wrap;
+  }
+
+  .um-user-actions .btn {
+    flex: 1 1 140px;
+  }
+
+  .config-card form > div[style*='grid-template-columns'] {
+    display: block !important;
+  }
+
+  .config-card form > div[style*='display: flex'][style*='margin-top: 16px'] {
+    flex-wrap: wrap;
+  }
+
+  .config-card form > div[style*='display: flex'][style*='margin-top: 16px'] .btn {
+    width: 100%;
+  }
+
+  .bp-overlay {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .topbar-brand {
+    gap: 8px;
+  }
+
+  .topbar-brand-title {
+    font-size: 14px;
+  }
+
+  .topbar-user-pill {
+    max-width: 100%;
+  }
+
+  .topbar-action-btn,
+  .topbar-logout-btn {
+    font-size: 11px;
+    padding: 5px 10px;
+  }
+
+  .sidebar .topnav-link {
+    border-radius: 10px;
+  }
+
+  .report-modal-actions,
+  .fb-confirm-actions {
+    flex-direction: column;
+  }
+
+  .report-modal-actions .report-btn-outline,
+  .report-modal-actions .report-btn-danger,
+  .fb-confirm-actions .fb-btn {
+    width: 100%;
+  }
+
+  .fb-preview-actions .fb-btn {
+    flex: 1 1 100%;
+  }
+}

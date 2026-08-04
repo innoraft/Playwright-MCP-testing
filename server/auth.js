@@ -85,6 +85,11 @@ function verifyToken(token) {
   return jwt.verify(token, getSecret());
 }
 
+function hasAdminRole(roles) {
+  if (!Array.isArray(roles)) return false;
+  return roles.some((role) => String(role).toLowerCase() === 'admin');
+}
+
 // ── User CRUD ────────────────────────────────────────────
 
 function getAllUsers() {
@@ -259,7 +264,19 @@ function requireAuth(req, res, next) {
   const token = authHeader.slice(7);
   try {
     const decoded = verifyToken(token);
-    req.user = decoded;
+
+    // Always hydrate from store so role changes (e.g. user promoted to admin)
+    // take effect immediately without requiring token re-login.
+    const user = getUserById(decoded.userId);
+    if (!user || !user.active) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    req.user = {
+      userId: user.id,
+      username: user.username,
+      roles: Array.isArray(user.roles) ? user.roles : []
+    };
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -271,7 +288,7 @@ function requireAuth(req, res, next) {
  * Must be used after requireAuth.
  */
 function requireAdminRole(req, res, next) {
-  if (!req.user || !req.user.roles || !req.user.roles.includes('admin')) {
+  if (!req.user || !hasAdminRole(req.user.roles)) {
     return res.status(403).json({ error: 'Forbidden: Admin access required' });
   }
   next();

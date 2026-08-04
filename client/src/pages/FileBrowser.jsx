@@ -153,7 +153,7 @@ export default function FileBrowser() {
     } finally {
       setDeleteConfirm(null);
     }
-  }, [currentPath, fetchDirectory, selectedFile, showToast]);
+  }, [currentPath, fetchDirectory, selectedFile, showToast, authFetch]);
 
   // ── Download file (requires auth header) ──────────────
   const downloadFile = useCallback(async (file) => {
@@ -180,7 +180,7 @@ export default function FileBrowser() {
   }, [items, searchQuery]);
 
   return (
-    <div className="page-container" style={{ maxWidth: '1200px' }}>
+    <div className="page-container">
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Files & Assets</h1>
@@ -191,31 +191,31 @@ export default function FileBrowser() {
 
       {/* Toast */}
       {toast && (
-        <div className={`toast toast-${toast.type}`}>
-          <span className="toast-icon">{toast.type === 'success' ? '✅' : '❌'}</span>
+        <div className={`fb-toast fb-toast-${toast.type}`}>
+          <span className="fb-toast-icon">{toast.type === 'success' ? '✅' : '❌'}</span>
           {toast.message}
         </div>
       )}
 
       {/* Delete Confirmation */}
       {deleteConfirm && (
-        <div className="confirm-overlay" onClick={() => setDeleteConfirm(null)}>
-          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-icon">🗑️</div>
+        <div className="fb-confirm-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="fb-confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="fb-confirm-icon">🗑️</div>
             <h3>Delete File</h3>
             <p>Are you sure you want to delete <strong>{deleteConfirm.name}</strong>?</p>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
               This action cannot be undone.
             </p>
-            <div className="confirm-actions">
+            <div className="fb-confirm-actions">
               <button
-                className="btn btn-secondary"
+                className="fb-btn fb-btn-secondary"
                 onClick={() => setDeleteConfirm(null)}
               >
                 Cancel
               </button>
               <button
-                className="btn btn-danger"
+                className="fb-btn fb-btn-danger"
                 onClick={() => deleteFile(deleteConfirm.path)}
               >
                 Delete
@@ -325,14 +325,14 @@ export default function FileBrowser() {
                 </div>
                 <div className="fb-preview-actions">
                   <button
-                    className="btn btn-secondary btn-sm"
+                    className="fb-btn fb-btn-secondary fb-btn-sm"
                     onClick={() => downloadFile(selectedFile)}
                     title="Download"
                   >
                     ⬇️ Download
                   </button>
                   <button
-                    className="btn btn-danger btn-sm"
+                    className="fb-btn fb-btn-danger fb-btn-sm"
                     onClick={() => setDeleteConfirm(selectedFile)}
                   >
                     🗑️ Delete
@@ -359,7 +359,7 @@ export default function FileBrowser() {
                     <h3>{selectedFile.name}</h3>
                     <p>Preview not available for .{selectedFile.extension} files</p>
                     <button
-                      className="btn btn-primary btn-sm"
+                      className="fb-btn fb-btn-primary fb-btn-sm"
                       onClick={() => downloadFile(selectedFile)}
                     >
                       ⬇️ Download File

@@ -153,10 +153,10 @@ function migrateExistingFiles(dirs, adminUserId) {
     }
   }
 
-  // Migrate files in screenshots and diffs
+  // Migrate files in asset folders and root files
   if (dirs.files && fs.existsSync(dirs.files)) {
     if (!data.files) data.files = {};
-    for (const subdir of ['screenshots', 'diffs']) {
+    for (const subdir of ['screenshots', 'diffs', 'uploads', 'Downloads', 'downloads']) {
       const subdirPath = path.join(dirs.files, subdir);
       if (fs.existsSync(subdirPath)) {
         const files = fs.readdirSync(subdirPath).filter(f => !f.startsWith('.'));
@@ -167,6 +167,16 @@ function migrateExistingFiles(dirs, adminUserId) {
             changed = true;
           }
         }
+      }
+    }
+
+    // Also track files directly under /files root.
+    const rootEntries = fs.readdirSync(dirs.files, { withFileTypes: true });
+    for (const entry of rootEntries) {
+      if (!entry.isFile() || entry.name.startsWith('.')) continue;
+      if (!data.files[entry.name]) {
+        data.files[entry.name] = adminUserId;
+        changed = true;
       }
     }
   }

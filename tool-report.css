@@ -14,8 +14,8 @@ body {
     "Helvetica Neue",
     Arial,
     sans-serif;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: #f5f7fb;
+  color: #1f2937;
   line-height: 1.6;
   padding: 2rem;
   min-height: 100vh;
@@ -28,8 +28,8 @@ body {
 
 /* Header */
 .header {
-  background: linear-gradient(135deg, #161b22 0%, #1c2333 100%);
-  border: 1px solid #30363d;
+  background: linear-gradient(135deg, #ffffff 0%, #f7faff 100%);
+  border: 1px solid #d7dee9;
   border-radius: 12px;
   padding: 2rem 2.5rem;
   margin-bottom: 1.5rem;
@@ -38,7 +38,7 @@ body {
 .header h1 {
   font-size: 1.75rem;
   font-weight: 700;
-  color: #f0f6fc;
+  color: #0f172a;
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
@@ -53,11 +53,11 @@ body {
 
 .meta-item {
   font-size: 0.9rem;
-  color: #8b949e;
+  color: #6b7280;
 }
 
 .meta-item span {
-  color: #c9d1d9;
+  color: #1f2937;
   font-weight: 500;
 }
 
@@ -70,8 +70,8 @@ body {
 }
 
 .summary-card {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: #ffffff;
+  border: 1px solid #d7dee9;
   border-radius: 10px;
   padding: 1.25rem;
   text-align: center;
@@ -82,7 +82,7 @@ body {
 
 .summary-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .summary-card .count {
@@ -96,30 +96,30 @@ body {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #8b949e;
+  color: #6b7280;
 }
 
 .card-total .count {
-  color: #f0f6fc;
+  color: #0f172a;
 }
 .card-passed .count {
-  color: #3fb950;
+  color: #15803d;
 }
 .card-failed .count {
-  color: #f85149;
+  color: #b91c1c;
 }
 .card-skipped .count {
-  color: #d29922;
+  color: #a16207;
 }
 
 .card-passed {
-  border-left: 3px solid #3fb950;
+  border-left: 3px solid #16a34a;
 }
 .card-failed {
-  border-left: 3px solid #f85149;
+  border-left: 3px solid #dc2626;
 }
 .card-skipped {
-  border-left: 3px solid #d29922;
+  border-left: 3px solid #d97706;
 }
 
 /* Overall badge */
@@ -135,21 +135,21 @@ body {
 }
 
 .badge-passed {
-  background: rgba(63, 185, 80, 0.15);
-  color: #3fb950;
-  border: 1px solid rgba(63, 185, 80, 0.3);
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
 }
 
 .badge-failed {
-  background: rgba(248, 81, 73, 0.15);
-  color: #f85149;
-  border: 1px solid rgba(248, 81, 73, 0.3);
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
 }
 
 /* Steps table */
 .steps-section {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: #ffffff;
+  border: 1px solid #d7dee9;
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 1.5rem;
@@ -159,9 +159,9 @@ body {
   padding: 1.25rem 1.5rem;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #f0f6fc;
-  border-bottom: 1px solid #30363d;
-  background: #1c2333;
+  color: #0f172a;
+  border-bottom: 1px solid #d7dee9;
+  background: #f7faff;
 }
 
 table {
@@ -175,14 +175,14 @@ th {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
-  border-bottom: 1px solid #30363d;
-  background: #161b22;
+  color: #6b7280;
+  border-bottom: 1px solid #d7dee9;
+  background: #f8fafc;
 }
 
 td {
   padding: 0.85rem 1rem;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid #e5eaf2;
   font-size: 0.9rem;
   vertical-align: top;
 }
@@ -191,12 +191,12 @@ td {
   width: 50px;
   text-align: center;
   font-weight: 600;
-  color: #8b949e;
+  color: #6b7280;
 }
 
 .step-text {
   min-width: 250px;
-  color: #f0f6fc;
+  color: #0f172a;
 }
 
 .step-status {
@@ -205,20 +205,20 @@ td {
 }
 
 .step-reason {
-  color: #8b949e;
+  color: #6b7280;
   font-size: 0.85rem;
 }
 
 .step-duration {
   width: 80px;
   text-align: right;
-  color: #8b949e;
+  color: #6b7280;
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
 
 .step-row:hover {
-  background: rgba(56, 139, 253, 0.05);
+  background: #eff6ff;
 }
 
 /* Status badges in table */
@@ -232,29 +232,29 @@ td {
 }
 
 .status-passed {
-  background: rgba(63, 185, 80, 0.15);
-  color: #3fb950;
+  background: #dcfce7;
+  color: #166534;
 }
 
 .status-failed {
-  background: rgba(248, 81, 73, 0.15);
-  color: #f85149;
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 .status-skipped {
-  background: rgba(210, 153, 34, 0.15);
-  color: #d29922;
+  background: #fef3c7;
+  color: #92400e;
 }
 
 /* Screenshot */
 .screenshot-row td {
   padding: 0.5rem 1rem 1.25rem;
-  background: rgba(248, 81, 73, 0.03);
-  border-bottom: 2px solid rgba(248, 81, 73, 0.15);
+  background: #fff7f7;
+  border-bottom: 2px solid #fecaca;
 }
 
 .screenshot-container {
-  border: 1px solid rgba(248, 81, 73, 0.2);
+  border: 1px solid #fca5a5;
   border-radius: 8px;
   overflow: hidden;
   max-width: 800px;
@@ -265,9 +265,9 @@ td {
   padding: 0.5rem 1rem;
   font-size: 0.8rem;
   font-weight: 600;
-  color: #f85149;
-  background: rgba(248, 81, 73, 0.08);
-  border-bottom: 1px solid rgba(248, 81, 73, 0.15);
+  color: #b91c1c;
+  background: #fee2e2;
+  border-bottom: 1px solid #fca5a5;
 }
 
 .screenshot {
@@ -278,8 +278,8 @@ td {
 
 /* Token usage footer */
 .footer {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: #ffffff;
+  border: 1px solid #d7dee9;
   border-radius: 12px;
   padding: 1.25rem 1.5rem;
 }
@@ -287,7 +287,7 @@ td {
 .footer h3 {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #f0f6fc;
+  color: #0f172a;
   margin-bottom: 0.75rem;
 }
 
@@ -299,11 +299,11 @@ td {
 
 .token-item {
   font-size: 0.85rem;
-  color: #8b949e;
+  color: #6b7280;
 }
 
 .token-item .value {
-  color: #c9d1d9;
+  color: #1f2937;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }

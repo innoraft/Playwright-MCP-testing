@@ -91,24 +91,43 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
   return (
     <div className="test-form">
       {/* Test Name */}
-      <div className="form-group">
-        <label className="form-label" htmlFor="general-test-name">
-          Test Name <span className="form-required">*</span>
-        </label>
-        <input
-          id="general-test-name"
-          className={`form-input ${errors.testName ? 'form-input-error' : ''}`}
-          type="text"
-          placeholder="e.g. Responsive Layout Validation Test"
-          value={testName}
-          onChange={(e) => {
-            setTestName(e.target.value);
-            setErrors(prev => { const n = { ...prev }; delete n.testName; return n; });
-          }}
-        />
-        {errors.testName && <span className="form-error-text">{errors.testName}</span>}
-      </div>
+      <div className="form-flex row">
+        <div className="form-group col-6">
+          <label className="form-label" htmlFor="general-test-name">
+            Test Name <span className="form-required">*</span>
+          </label>
+          <input
+            id="general-test-name"
+            className={`form-input ${errors.testName ? 'form-input-error' : ''}`}
+            type="text"
+            placeholder="e.g. Responsive Layout Validation Test"
+            value={testName}
+            onChange={(e) => {
+              setTestName(e.target.value);
+              setErrors(prev => { const n = { ...prev }; delete n.testName; return n; });
+            }}
+          />
+          {errors.testName && <span className="form-error-text">{errors.testName}</span>}
+        </div>
 
+        <div className="form-group col-6">
+          <label className="form-label" htmlFor="general-base-url">
+            Base URL <span className="form-required">*</span>
+          </label>
+          <input
+            id="general-base-url"
+            className={`form-input ${errors.baseUrl ? 'form-input-error' : ''}`}
+            type="text"
+            placeholder="https://www.example.com"
+            value={baseUrl}
+            onChange={(e) => {
+              setBaseUrl(e.target.value);
+              setErrors(prev => { const n = { ...prev }; delete n.baseUrl; return n; });
+            }}
+          />
+          {errors.baseUrl && <span className="form-error-text">{errors.baseUrl}</span>}
+        </div>
+      </div>
       <div className="form-group">
         <label className="form-label" htmlFor="general-suite-description">
           Suite Description
@@ -121,24 +140,6 @@ export default function GeneralTestForm({ initialData, onSave, saving }) {
           value={suiteDescription}
           onChange={(e) => setSuiteDescription(e.target.value)}
         />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label" htmlFor="general-base-url">
-          Base URL <span className="form-required">*</span>
-        </label>
-        <input
-          id="general-base-url"
-          className={`form-input ${errors.baseUrl ? 'form-input-error' : ''}`}
-          type="text"
-          placeholder="https://www.example.com"
-          value={baseUrl}
-          onChange={(e) => {
-            setBaseUrl(e.target.value);
-            setErrors(prev => { const n = { ...prev }; delete n.baseUrl; return n; });
-          }}
-        />
-        {errors.baseUrl && <span className="form-error-text">{errors.baseUrl}</span>}
       </div>
 
       <hr className="form-divider" />

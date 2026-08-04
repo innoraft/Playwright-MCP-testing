@@ -1,4 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  BarChart3,
+  CheckCircle2,
+  ExternalLink,
+  FileText,
+  RefreshCcw,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
 export default function Reports({ initialReport }) {
@@ -8,7 +17,6 @@ export default function Reports({ initialReport }) {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterResult, setFilterResult] = useState('all'); // 'all' | 'pass' | 'fail'
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const pollRef = useRef(null);
@@ -125,28 +133,33 @@ export default function Reports({ initialReport }) {
     return name.replace('.html', '');
   };
 
+  const normalizeResult = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (['pass', 'passed', 'success', 'ok'].includes(normalized)) return 'pass';
+    if (['fail', 'failed', 'error'].includes(normalized)) return 'fail';
+    return 'unknown';
+  };
+
   // ── Filter reports ────────────────────────────────────
   const filteredReports = reports.filter(r => {
     const matchesSearch = searchQuery === '' ||
       r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       friendlyName(r.name).toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesResult = filterResult === 'all' ||
-      r.result === filterResult;
-    return matchesSearch && matchesResult;
+    return matchesSearch;
   });
 
   // ── Report stats for summary ──────────────────────────
   const totalReports = reports.length;
-  const passedReports = reports.filter(r => r.result === 'pass').length;
-  const failedReports = reports.filter(r => r.result === 'fail').length;
+  const passedReports = reports.filter(r => normalizeResult(r.result) === 'pass').length;
+  const failedReports = reports.filter(r => normalizeResult(r.result) === 'fail').length;
 
   return (
     <div className="page-container page-container-wide">
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast ${toast.type}`}>
-            <span>{toast.type === 'success' ? '✓' : '✕'}</span>
+        <div className="report-toast-container">
+          <div className={`report-toast report-toast-${toast.type}`}>
+            <span>{toast.type === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}</span>
             {toast.message}
           </div>
         </div>
@@ -190,16 +203,16 @@ export default function Reports({ initialReport }) {
                 onClick={() => fetchReports()}
                 title="Refresh reports"
               >
-                ↻
+                <RefreshCcw size={16} aria-hidden="true" />
               </button>
               <button
-                className="btn-danger btn-delete-all"
+                className="report-btn-danger btn-delete-all"
                 onClick={() => setConfirmDeleteAll(true)}
                 title="Delete all reports"
                 disabled={reports.length === 0}
                 aria-label="Delete all reports"
               >
-                🗑️
+                <Trash2 size={16} aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -213,28 +226,17 @@ export default function Reports({ initialReport }) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
-            <div className="report-filter-pills">
-              {['all', 'pass', 'fail'].map(f => (
-                <button
-                  key={f}
-                  className={`report-filter-pill ${filterResult === f ? 'active' : ''} ${f}`}
-                  onClick={() => setFilterResult(f)}
-                >
-                  {f === 'all' ? 'All' : f === 'pass' ? '✓ Pass' : '✕ Fail'}
-                </button>
-              ))}
-            </div>
           </div>
 
           {loading ? (
-            <div className="test-list-loading">
+            <div className="report-list-loading">
               {[1, 2, 3].map(i => (
-                <div key={i} className="skeleton" style={{ height: 60, marginBottom: 8, borderRadius: 8 }} />
+                <div key={i} className="report-skeleton" style={{ height: 60, marginBottom: 8, borderRadius: 8 }} />
               ))}
             </div>
           ) : filteredReports.length === 0 ? (
-            <div className="test-list-empty">
-              <span className="test-list-empty-icon">📊</span>
+            <div className="report-list-empty">
+              <span className="report-list-empty-icon"><BarChart3 size={24} /></span>
               <span>{reports.length === 0 ? 'No reports yet' : 'No matching reports'}</span>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 {reports.length === 0
@@ -244,15 +246,17 @@ export default function Reports({ initialReport }) {
             </div>
           ) : (
             <div className="report-list">
-              {filteredReports.map(report => (
+              {filteredReports.map(report => {
+                const result = normalizeResult(report.result);
+                return (
                 <div
                   key={report.name}
                   className={`report-list-item ${selectedReport === report.name ? 'active' : ''}`}
                   onClick={() => setSelectedReport(report.name)}
                 >
                   <div className="report-list-item-info">
-                    <span className={`report-list-item-icon ${report.result === 'pass' ? 'pass' : report.result === 'fail' ? 'fail' : ''}`}>
-                      {report.result === 'pass' ? '✅' : report.result === 'fail' ? '❌' : '📄'}
+                    <span className={`report-list-item-icon ${result === 'pass' ? 'pass' : result === 'fail' ? 'fail' : ''}`}>
+                      {result === 'pass' ? <CheckCircle2 size={16} /> : result === 'fail' ? <XCircle size={16} /> : <FileText size={16} />}
                     </span>
                     <div className="report-list-item-details">
                       <span className="report-list-item-name" title={report.name}>
@@ -288,10 +292,11 @@ export default function Reports({ initialReport }) {
                       setConfirmDelete(report.name);
                     }}
                   >
-                    🗑
+                    <Trash2 size={14} aria-hidden="true" />
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </aside>
@@ -302,22 +307,22 @@ export default function Reports({ initialReport }) {
             <div className="report-viewer-container">
               <div className="report-viewer-toolbar">
                 <span className="report-viewer-filename">
-                  📊 {friendlyName(selectedReport)}
+                  <BarChart3 size={16} /> {friendlyName(selectedReport)}
                 </span>
                 <div className="report-viewer-actions">
                   <a
                     href={`/reports/${selectedReport}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="btn-outline report-open-btn"
+                    className="report-btn-outline report-open-btn"
                   >
-                    Open in New Tab ↗
+                    Open in New Tab <ExternalLink size={14} aria-hidden="true" />
                   </a>
                   <button
-                    className="btn-outline report-delete-toolbar-btn"
+                    className="report-btn-outline report-delete-toolbar-btn"
                     onClick={() => setConfirmDelete(selectedReport)}
                   >
-                    🗑 Delete
+                    <Trash2 size={14} aria-hidden="true" /> Delete
                   </button>
                 </div>
               </div>
@@ -331,7 +336,7 @@ export default function Reports({ initialReport }) {
             </div>
           ) : (
             <div className="report-viewer-empty">
-              <span className="report-viewer-empty-icon">📊</span>
+              <span className="report-viewer-empty-icon"><BarChart3 size={28} /></span>
               <h3>No Report Selected</h3>
               <p>Select a report from the list to view it, or run a test to generate a new report.</p>
             </div>
@@ -341,17 +346,17 @@ export default function Reports({ initialReport }) {
 
       {/* Delete Confirmation Modal */}
       {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Delete Report?</h3>
-            <p className="modal-text">
+        <div className="report-modal-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="report-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3 className="report-modal-title">Delete Report?</h3>
+            <p className="report-modal-text">
               Are you sure you want to delete <strong>{friendlyName(confirmDelete)}</strong>? This action cannot be undone.
             </p>
-            <div className="modal-actions">
-              <button className="btn-outline" onClick={() => setConfirmDelete(null)}>
+            <div className="report-modal-actions">
+              <button className="report-btn-outline" onClick={() => setConfirmDelete(null)}>
                 Cancel
               </button>
-              <button className="btn-danger" onClick={() => handleDelete(confirmDelete)}>
+              <button className="report-btn-danger" onClick={() => handleDelete(confirmDelete)}>
                 Delete Report
               </button>
             </div>
@@ -360,17 +365,17 @@ export default function Reports({ initialReport }) {
       )}
 
       {confirmDeleteAll && (
-        <div className="modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Delete All Reports?</h3>
-            <p className="modal-text">
+        <div className="report-modal-overlay" onClick={() => setConfirmDeleteAll(false)}>
+          <div className="report-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3 className="report-modal-title">Delete All Reports?</h3>
+            <p className="report-modal-text">
               Are you sure you want to delete all visible reports? This action cannot be undone.
             </p>
-            <div className="modal-actions">
-              <button className="btn-outline" onClick={() => setConfirmDeleteAll(false)}>
+            <div className="report-modal-actions">
+              <button className="report-btn-outline" onClick={() => setConfirmDeleteAll(false)}>
                 Cancel
               </button>
-              <button className="btn-danger" onClick={handleDeleteAll}>
+              <button className="report-btn-danger" onClick={handleDeleteAll}>
                 Delete All Reports
               </button>
             </div>
