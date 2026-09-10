@@ -22,6 +22,10 @@
  * @returns {string} Static system prompt
  */
 export function buildStaticSystemPrompt(mcpTools, isVisualRegression = false) {
+  const runId = process.env.PLAYWRIGHT_RUN_ID?.trim();
+  const screenshotDirectory = runId ? `files/screenshots/${runId}` : 'files/screenshots';
+  const screenshotSaveDirectory = runId ? `./screenshots/${runId}` : './screenshots';
+
   // Dynamically inject tool definitions
   let toolsInfo = Array.from(mcpTools.values()).map((tool) => ({
     name: tool.name,
@@ -78,9 +82,6 @@ ${JSON.stringify(toolsInfo, null, 2)}
 - **Best Fit:** Select the tool whose description most accurately describes the action required by the step.
 - **Don't send invalid json.
 - **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
-IMPORTANT: For steps that involve alerts, confirms, or prompts, you MUST use the "browser_handle_dialog" tool. 
-Do NOT use "browser_run_code_unsafe" for modal dialogs.
-IMPORTANT: For steps that involve selecting a value from a dropdown, you MUST use the "browser_select_option" tool or any other code based tool, Do NOT use "browser_press_key" to select dropdown values.
 
 ### 2. Parameter Generation (Schema Compliance)
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.
@@ -110,11 +111,11 @@ brackets: "e45", "e57" etc. Never pass [e45] or ref=e45 — always strip the bra
   - The MCP tool will execute the function, you must only define it.
 
 ### 5. Screenshot check
-- When generating code that takes screenshots, ALWAYS save to './screenshots/<filename>.png' 
+- When generating code that takes screenshots, ALWAYS save to '${screenshotSaveDirectory}/<filename>.png' 
   (relative to the working directory), never to the root directory.
-  Example: await page.screenshot({ path: './screenshots/step-\${Date.now()}.png' })
-- When calling visual_regression_check, always use the full path from the project root: 'files/screenshots/<filename>.png'
-  Example: screenshotPath: 'files/screenshots/home_1280px.png'
+  Example: await page.screenshot({ path: '${screenshotSaveDirectory}/step-\${Date.now()}.png' })
+- When calling visual_regression_check, always use the full path from the project root: '${screenshotDirectory}/<filename>.png'
+  Example: screenshotPath: '${screenshotDirectory}/home_1280px.png'
 
 ## OUTPUT FORMAT
 Return a **SINGLE VALID JSON ARRAY**. Do not include markdown formatting, code blocks, or explanatory text outside the array.

@@ -218,6 +218,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
     if (!selectedTest) return;
 
     // Clear previous state
+    runIdRef.current = null;
     setLogs([]);
     setResult(null);
     setStatus('running');
@@ -242,6 +243,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       // Connect to SSE for live logs/events
       connectSSE(data.runId);
     } catch (err) {
+      runIdRef.current = null;
       showToast(err.message, 'error');
       setStatus('idle');
       if (onRunningChange) onRunningChange(false);
@@ -250,6 +252,11 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
+    if (!runIdRef.current) {
+      showToast('Test is still starting. Please wait a moment.', 'error');
+      return;
+    }
+
     try {
       const res = await authFetch('/api/runner/stop', {
         method: 'POST',
@@ -335,6 +342,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
               <button
                 className="btn-stop"
                 onClick={handleStop}
+                disabled={!runIdRef.current}
                 id="stop-btn"
               >
                 <span className="btn-icon">⏹</span>

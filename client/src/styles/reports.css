@@ -524,6 +524,7 @@
 }
 
 .report-btn-outline {
+  color: var(--text-secondary);
   border: 1px solid var(--section-border);
 }
 

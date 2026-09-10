@@ -24,6 +24,9 @@ import { buildPlanningUserMessage } from './src/prompts/step.prompt.js';
 import { findChromiumPath } from './src/utils/browser-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const runId = process.env.PLAYWRIGHT_RUN_ID?.trim() || '';
+const runScreenshotsDir = runId ? `files/screenshots/${runId}` : 'files/screenshots';
+const runDiffsDir = runId ? `files/diffs/${runId}` : 'files/diffs';
 
 const config = {
   llm: {
@@ -37,8 +40,9 @@ const config = {
     viewport: { width: 1280, height: 720 }
   },
   reporting: {
-    screenshotsDir: 'files/screenshots',
-    outputDir: 'test-reports'
+    screenshotsDir: runScreenshotsDir,
+    outputDir: 'test-reports',
+    runId
   }
 };
 
@@ -67,7 +71,10 @@ class VisualMCPRunner {
       model: config.llm.model,
       apiKey: config.llm.apiKey
     });
-    this.visualChecker = new VisualRegressionChecker();
+    this.visualChecker = new VisualRegressionChecker({
+      baselineDir: 'files/baselines',
+      diffDir: runDiffsDir
+    });
     this.systemPrompt = null;
     this.cdpService = new CDPService(config.browser, log);
   }
@@ -147,7 +154,7 @@ class VisualMCPRunner {
 
   async initializeMCP() {
     const workspaceDir = path.resolve('files');
-    const screenshotsDir = path.join(workspaceDir, 'screenshots');
+    const screenshotsDir = path.join(workspaceDir, runId ? `screenshots/${runId}` : 'screenshots');
     const uploadsDir = path.join(workspaceDir, 'uploads');
 
     fs.mkdirSync(path.resolve('files/baselines'), { recursive: true });
@@ -167,7 +174,7 @@ class VisualMCPRunner {
         '@playwright/mcp@latest',
         '--cdp-endpoint', `http://127.0.0.1:${cdpPort}`,
         '--ignore-https-errors',
-        '--output-dir', 'screenshots',
+        '--output-dir', runId ? `screenshots/${runId}` : 'screenshots',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',
@@ -535,6 +542,7 @@ class VisualMCPRunner {
 
     const report = this.reportGenerator.generateReport(this.testReport);
     log.success(`📊 HTML Report: ${report.htmlReport}`);
+    console.log(`__REPORT_FILE__${path.basename(report.htmlReport)}`);
 
     if (this.testResults.failed > 0) {
       throw new Error('Test failed');

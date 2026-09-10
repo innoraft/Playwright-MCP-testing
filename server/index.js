@@ -848,7 +848,8 @@ function createRunnerState() {
     sseClients: [],        // connected SSE clients
     result: null,          // 'passed' | 'failed' | null
     reportFile: null,      // latest report filename
-    startedAt: null        // run start time
+    startedAt: null,       // run start time
+    completedAt: null
   };
 }
 
@@ -861,6 +862,22 @@ function getRunnerState(userId, runId) {
 // Run history — stores completed runs for lookup
 const runHistory = [];
 const MAX_HISTORY = 50;
+const completedRunIds = [];
+
+function retainCompletedRun(state) {
+  if (state.completedAt) return;
+
+  state.completedAt = Date.now();
+  completedRunIds.push(state.runId);
+
+  while (completedRunIds.length > MAX_HISTORY) {
+    const oldestRunId = completedRunIds.shift();
+    const oldestState = runnerStates.get(oldestRunId);
+    if (oldestState?.status !== 'running') {
+      runnerStates.delete(oldestRunId);
+    }
+  }
+}
 
 function generateRunId() {
   return `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -873,6 +890,24 @@ function detectLogType(line) {
   if (/🤖|LLM/i.test(line)) return 'llm';
   if (/📍|Step \d+/i.test(line)) return 'step';
   return 'info';
+}
+
+function listFilesRecursively(dirPath, relativePath = '') {
+  if (!fs.existsSync(dirPath)) return [];
+
+  const files = [];
+  for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+
+    const entryPath = path.join(dirPath, entry.name);
+    const entryRelativePath = path.join(relativePath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursively(entryPath, entryRelativePath));
+    } else {
+      files.push(entryRelativePath);
+    }
+  }
+  return files;
 }
 
 // ── Broadcast to a user's SSE clients ──────────────────────
@@ -946,10 +981,11 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
 
   const currentUserId = userId;
   const runnerEnv = { ...process.env };
+  runnerEnv.PLAYWRIGHT_RUN_ID = currentRunId;
 
   if (runner === 'tool-call') {
     runnerEnv.MCP_WORKSPACE_DIR = FILES_DIR;
-    runnerEnv.MCP_OUTPUT_DIR = '.';
+    runnerEnv.MCP_OUTPUT_DIR = `screenshots/${currentRunId}`;
   }
 
   // Spawn the test runner as a child process
@@ -1044,6 +1080,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     state.status = 'idle';
     state.result = code === 0 ? 'passed' : 'failed';
     state.process = null;
+    retainCompletedRun(state);
 
     // Fallback: find latest report only if runner didn't publish one explicitly
     if (!state.reportFile) {
@@ -1075,8 +1112,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       for (const subdir of ['screenshots', 'diffs', 'uploads', 'Downloads', 'downloads']) {
         const dirPath = path.join(FILES_DIR, subdir);
         if (fs.existsSync(dirPath)) {
-          const newFiles = fs.readdirSync(dirPath)
-            .filter(f => !f.startsWith('.'))
+          const newFiles = listFilesRecursively(dirPath)
             .filter(f => {
               try {
                 return fs.statSync(path.join(dirPath, f)).mtimeMs >= runStart;
@@ -1130,6 +1166,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     state.status = 'idle';
     state.result = 'failed';
     state.process = null;
+    retainCompletedRun(state);
 
     const logEntry = { line: `Process error: ${err.message}`, type: 'fail', timestamp: Date.now() };
     state.logBuffer.push(logEntry);
@@ -1203,7 +1240,15 @@ app.get('/api/runner/logs', (req, res, next) => {
 
 // ── POST /api/runner/stop ──────────────────────────────────
 app.post('/api/runner/stop', requireAuth, (req, res) => {
-  const state = getRunnerState(req.user.userId, req.body?.runId);
+  const { runId } = req.body || {};
+  if (!runId) {
+    return res.status(400).json({ error: 'runId is required' });
+  }
+
+  const state = getRunnerState(req.user.userId, runId);
+  if (!state) {
+    return res.status(404).json({ error: 'Runner session not found' });
+  }
 
   if (state.status !== 'running' || !state.process) {
     return res.status(400).json({ error: 'No test is currently running' });
@@ -1232,6 +1277,7 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
       state.status = 'idle';
       state.result = 'stopped';
       state.process = null;
+      retainCompletedRun(state);
 
       // Notify SSE clients that the run is done
       broadcastSSE(req.user.userId, state.runId, 'done', {
