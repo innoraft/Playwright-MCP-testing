@@ -168,7 +168,6 @@ class VisualMCPRunner {
         '--cdp-endpoint', `http://127.0.0.1:${cdpPort}`,
         '--ignore-https-errors',
         '--output-dir', 'screenshots',
-        '--output-mode', 'stdout',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
       stderr: 'inherit',

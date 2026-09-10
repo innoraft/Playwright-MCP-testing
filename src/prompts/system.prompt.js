@@ -30,7 +30,14 @@ export function buildStaticSystemPrompt(mcpTools, isVisualRegression = false) {
   }));
 
   if (isVisualRegression) {
-    toolsInfo = toolsInfo.filter(t => t.name === 'browser_run_code_unsafe' || t.name.includes('screenshot'));
+    const visualActionTools = new Set([
+      'browser_navigate',
+      'browser_resize',
+      'browser_wait_for',
+      'browser_run_code_unsafe',
+      'browser_take_screenshot',
+    ]);
+    toolsInfo = toolsInfo.filter(t => visualActionTools.has(t.name) || t.name.includes('screenshot'));
   }
 
   toolsInfo.push({
@@ -72,7 +79,8 @@ ${JSON.stringify(toolsInfo, null, 2)}
 - **Don't send invalid json.
 - **Strict Adherence:** You must ONLY use tools listed in the "AVAILABLE TOOLS" section. Do not hallucinate tool names.
 IMPORTANT: For steps that involve alerts, confirms, or prompts, you MUST use the "browser_handle_dialog" tool. 
-Do NOT use "browser_run_code" for modal dialogs.
+Do NOT use "browser_run_code_unsafe" for modal dialogs.
+IMPORTANT: For steps that involve selecting a value from a dropdown, you MUST use the "browser_select_option" tool or any other code based tool, Do NOT use "browser_press_key" to select dropdown values.
 
 ### 2. Parameter Generation (Schema Compliance)
 - **Schema Mapping:** Once a tool is selected, you must generate parameters that strictly adhere to its \`schema\`.

@@ -525,8 +525,6 @@
 
 .report-btn-outline {
   border: 1px solid var(--section-border);
-  /* background: #fff; */
-  color: var(--text-secondary);
 }
 
 .report-btn-outline:hover {

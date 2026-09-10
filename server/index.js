@@ -831,10 +831,11 @@ app.post('/api/forms/detect', requireAuth, async (req, res) => {
 //  TEST RUNNER ENDPOINTS
 // ══════════════════════════════════════════════════════════
 
-// ── Per-user runner state ───────────────────────────────────
-// Each user gets their own isolated runner state so multiple
-// users can run tests concurrently without blocking each other.
-const runnerStates = new Map(); // Map<userId, RunnerState>
+// ── Per-run runner state ────────────────────────────────────
+// Each run owns its process, logs, SSE clients, and browser session.
+// This allows multiple dashboard tabs for the same user to run concurrently.
+const runnerStates = new Map(); // Map<runId, RunnerState>
+const latestRunByUser = new Map(); // Map<userId, runId>
 
 function createRunnerState() {
   return {
@@ -851,24 +852,10 @@ function createRunnerState() {
   };
 }
 
-function getRunnerState(userId) {
-  if (!runnerStates.has(userId)) {
-    runnerStates.set(userId, createRunnerState());
-  }
-  return runnerStates.get(userId);
-}
-
-function resetRunnerState(userId) {
-  const state = getRunnerState(userId);
-  state.status = 'idle';
-  state.runId = null;
-  state.testName = null;
-  state.userId = null;
-  state.process = null;
-  state.logBuffer = [];
-  state.result = null;
-  state.reportFile = null;
-  state.startedAt = null;
+function getRunnerState(userId, runId) {
+  const resolvedRunId = runId || latestRunByUser.get(userId);
+  const state = resolvedRunId ? runnerStates.get(resolvedRunId) : null;
+  return state?.userId === userId ? state : null;
 }
 
 // Run history — stores completed runs for lookup
@@ -889,8 +876,9 @@ function detectLogType(line) {
 }
 
 // ── Broadcast to a user's SSE clients ──────────────────────
-function broadcastSSE(userId, event, data) {
-  const state = getRunnerState(userId);
+function broadcastSSE(userId, runId, event, data) {
+  const state = getRunnerState(userId, runId);
+  if (!state) return;
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   state.sseClients = state.sseClients.filter(res => {
     try {
@@ -916,12 +904,6 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     'visual-regression': 'ai_visual_runner.js',
     performance: 'ai_lighthouse_runner.js',
   };
-
-  const state = getRunnerState(userId);
-
-  if (state.status === 'running') {
-    return res.status(409).json({ error: 'You already have a test running' });
-  }
 
   // Sanitize
   if (testName.includes('..') || testName.includes('/')) {
@@ -951,15 +933,17 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       break;
   }
 
-  // Reset state for new run
-  resetRunnerState(userId);
+  // Create an independent state for every requested run.
+  const currentRunId = generateRunId();
+  const state = createRunnerState();
   state.status = 'running';
-  state.runId = generateRunId();
+  state.runId = currentRunId;
   state.testName = testName;
   state.userId = userId;
   state.startedAt = Date.now();
+  runnerStates.set(currentRunId, state);
+  latestRunByUser.set(userId, currentRunId);
 
-  const currentRunId = state.runId;
   const currentUserId = userId;
   const runnerEnv = { ...process.env };
 
@@ -995,13 +979,13 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       // Detect CDP screencast frames — forward as a separate SSE event
       if (line.startsWith('__SCREENCAST_FRAME__')) {
         const frameData = line.slice('__SCREENCAST_FRAME__'.length);
-        broadcastSSE(currentUserId, 'screencast', { frame: frameData });
+        broadcastSSE(currentUserId, currentRunId, 'screencast', { frame: frameData });
         continue; // don't add to log buffer
       }
 
       // Detect performance test marker — notify UI to suppress live monitor
       if (line.startsWith('__PERF_TEST__')) {
-        broadcastSSE(currentUserId, 'perftest', { isPerformanceTest: true });
+        broadcastSSE(currentUserId, currentRunId, 'perftest', { isPerformanceTest: true });
         continue; // don't add to log buffer
       }
 
@@ -1023,7 +1007,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       const logType = detectLogType(line);
       const logEntry = { line, type: logType, timestamp: Date.now() };
       state.logBuffer.push(logEntry);
-      broadcastSSE(currentUserId, 'log', logEntry);
+      broadcastSSE(currentUserId, currentRunId, 'log', logEntry);
     }
   });
 
@@ -1038,7 +1022,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       if (line.trim() === '') continue;
       const logEntry = { line, type: 'fail', timestamp: Date.now() };
       state.logBuffer.push(logEntry);
-      broadcastSSE(currentUserId, 'log', logEntry);
+      broadcastSSE(currentUserId, currentRunId, 'log', logEntry);
     }
   });
 
@@ -1049,12 +1033,12 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       const logType = detectLogType(stdoutBuffer);
       const logEntry = { line: stdoutBuffer, type: logType, timestamp: Date.now() };
       state.logBuffer.push(logEntry);
-      broadcastSSE(currentUserId, 'log', logEntry);
+      broadcastSSE(currentUserId, currentRunId, 'log', logEntry);
     }
     if (stderrBuffer.trim()) {
       const logEntry = { line: stderrBuffer, type: 'fail', timestamp: Date.now() };
       state.logBuffer.push(logEntry);
-      broadcastSSE(currentUserId, 'log', logEntry);
+      broadcastSSE(currentUserId, currentRunId, 'log', logEntry);
     }
 
     state.status = 'idle';
@@ -1133,7 +1117,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     });
     if (runHistory.length > MAX_HISTORY) runHistory.pop();
 
-    broadcastSSE(currentUserId, 'done', {
+    broadcastSSE(currentUserId, currentRunId, 'done', {
       runId: currentRunId,
       result: state.result,
       reportFile: state.reportFile,
@@ -1149,8 +1133,8 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
 
     const logEntry = { line: `Process error: ${err.message}`, type: 'fail', timestamp: Date.now() };
     state.logBuffer.push(logEntry);
-    broadcastSSE(currentUserId, 'log', logEntry);
-    broadcastSSE(currentUserId, 'done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
+    broadcastSSE(currentUserId, currentRunId, 'log', logEntry);
+    broadcastSSE(currentUserId, currentRunId, 'done', { runId: currentRunId, result: 'failed', reportFile: null, exitCode: -1 });
   });
 
   res.json({
@@ -1173,7 +1157,10 @@ app.get('/api/runner/logs', (req, res, next) => {
   requireAuth(req, res, next);
 }, (req, res) => {
   const userId = req.user.userId;
-  const state = getRunnerState(userId);
+  const state = getRunnerState(userId, req.query.runId);
+  if (!state) {
+    return res.status(404).json({ error: 'Runner session not found' });
+  }
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -1216,7 +1203,7 @@ app.get('/api/runner/logs', (req, res, next) => {
 
 // ── POST /api/runner/stop ──────────────────────────────────
 app.post('/api/runner/stop', requireAuth, (req, res) => {
-  const state = getRunnerState(req.user.userId);
+  const state = getRunnerState(req.user.userId, req.body?.runId);
 
   if (state.status !== 'running' || !state.process) {
     return res.status(400).json({ error: 'No test is currently running' });
@@ -1247,7 +1234,7 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
       state.process = null;
 
       // Notify SSE clients that the run is done
-      broadcastSSE(req.user.userId, 'done', {
+      broadcastSSE(req.user.userId, state.runId, 'done', {
         runId: state.runId,
         result: 'stopped',
         reportFile: null,
@@ -1264,7 +1251,10 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
 
 // ── GET /api/runner/status ─────────────────────────────────
 app.get('/api/runner/status', requireAuth, (req, res) => {
-  const state = getRunnerState(req.user.userId);
+  const state = getRunnerState(req.user.userId, req.query.runId);
+  if (!state) {
+    return res.status(404).json({ error: 'Runner session not found' });
+  }
 
   res.json({
     status: state.status,
