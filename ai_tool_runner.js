@@ -844,6 +844,7 @@ async function main() {
       totalDurationMs,
     });
     console.log(`📄 HTML Report saved: ${reportPath}\n`);
+    console.log(`__REPORT_FILE__${path.basename(reportPath)}`);
   } catch (error) {
     console.error(`\n❌ Agent execution failed:`, error instanceof Error ? error.message : error);
     if (error instanceof Error && error.stack) {

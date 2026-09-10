@@ -17,6 +17,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const runIdRef = useRef(null);
   const liveLayoutRef = useRef(null);
   const runActivityRef = useRef(null);
   const showAnimation = TEST_RUNNER_UI.animation;
@@ -149,12 +150,14 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   };
 
   // ── Connect to SSE ───────────────────────────────────
-  const connectSSE = useCallback(() => {
+  const connectSSE = useCallback((runId) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`/api/runner/logs?token=${encodeURIComponent(token)}`);
+    const es = new EventSource(
+      `/api/runner/logs?token=${encodeURIComponent(token)}&runId=${encodeURIComponent(runId)}`
+    );
     eventSourceRef.current = es;
 
     es.addEventListener('log', (e) => {
@@ -195,6 +198,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
             onNavigateToReport(data.reportFile);
           }, 2500);
         }
+        runIdRef.current = null;
       } catch { /* ignore */ }
 
       es.close();
@@ -214,6 +218,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
     if (!selectedTest) return;
 
     // Clear previous state
+    runIdRef.current = null;
     setLogs([]);
     setResult(null);
     setStatus('running');
@@ -232,9 +237,13 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         throw new Error(err.error || 'Failed to start test');
       }
 
+      const data = await res.json();
+      runIdRef.current = data.runId;
+
       // Connect to SSE for live logs/events
-      connectSSE();
+      connectSSE(data.runId);
     } catch (err) {
+      runIdRef.current = null;
       showToast(err.message, 'error');
       setStatus('idle');
       if (onRunningChange) onRunningChange(false);
@@ -243,8 +252,16 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
+    if (!runIdRef.current) {
+      showToast('Test is still starting. Please wait a moment.', 'error');
+      return;
+    }
+
     try {
-      const res = await authFetch('/api/runner/stop', { method: 'POST' });
+      const res = await authFetch('/api/runner/stop', {
+        method: 'POST',
+        body: JSON.stringify({ runId: runIdRef.current })
+      });
       let reportFile;
 
       // Stop may or may not return a report path; navigate either way.
@@ -264,6 +281,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
+      runIdRef.current = null;
 
       if (onNavigateToReport) {
         onNavigateToReport(reportFile);
@@ -324,6 +342,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
               <button
                 className="btn-stop"
                 onClick={handleStop}
+                disabled={!runIdRef.current}
                 id="stop-btn"
               >
                 <span className="btn-icon">⏹</span>

@@ -201,19 +201,16 @@ export default function BaselineManager() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-icon">🗑️</span>
-              <h3>Delete Baseline</h3>
-            </div>
-            <p className="modal-text">
+        <div className="report-modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="report-modal-dialog" onClick={e => e.stopPropagation()}>
+            <h3 className="report-modal-title">Delete Baseline</h3>
+            <p className="report-modal-text">
               Are you sure you want to delete <strong>{deleteConfirm}</strong>?
               Visual regression tests relying on this image will fail until a new baseline is uploaded.
             </p>
-            <div className="modal-actions">
-              <button className="btn-outline" onClick={() => setDeleteConfirm(null)}>Cancel</button>
-              <button className="btn-danger" onClick={() => handleDelete(deleteConfirm)}>Delete</button>
+            <div className="report-modal-actions">
+              <button className="report-btn-outline" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="report-btn-danger" onClick={() => handleDelete(deleteConfirm)}>Delete</button>
             </div>
           </div>
         </div>
@@ -221,7 +218,7 @@ export default function BaselineManager() {
 
       {/* Image Preview Modal */}
       {previewImage && (
-        <div className="modal-overlay baseline-preview-overlay" onClick={() => setPreviewImage(null)}>
+        <div className="report-modal-overlay baseline-preview-overlay" onClick={() => setPreviewImage(null)}>
           <div className="baseline-preview-modal" onClick={e => e.stopPropagation()}>
             {/* Preview header */}
             <div className="baseline-preview-header">
