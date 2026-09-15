@@ -1082,24 +1082,6 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     state.process = null;
     retainCompletedRun(state);
 
-    // Fallback: find latest report only if runner didn't publish one explicitly
-    if (!state.reportFile) {
-      try {
-        if (fs.existsSync(REPORTS_DIR)) {
-          const reports = fs.readdirSync(REPORTS_DIR)
-            .filter(f => f.endsWith('.html'))
-            .map(f => ({ name: f, mtime: fs.statSync(path.join(REPORTS_DIR, f)).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime);
-
-          if (reports.length > 0) {
-            state.reportFile = reports[0].name;
-          }
-        }
-      } catch (err) {
-        console.error('Failed to find report:', err);
-      }
-    }
-
     // Attribute generated files to the user who triggered the run
     if (currentUserId) {
       // Attribute report
