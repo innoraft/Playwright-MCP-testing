@@ -14,6 +14,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const [screencastFrame, setScreencastFrame] = useState(null);
   const [isPerformanceTest, setIsPerformanceTest] = useState(false);
   const [animeActive, setAnimeActive] = useState(false);
+  const [activeRunId, setActiveRunId] = useState(null);
 
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -199,6 +200,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
           }, 2500);
         }
         runIdRef.current = null;
+        setActiveRunId(null);
       } catch { /* ignore */ }
 
       es.close();
@@ -219,6 +221,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
     // Clear previous state
     runIdRef.current = null;
+    setActiveRunId(null);
     setLogs([]);
     setResult(null);
     setStatus('running');
@@ -239,11 +242,13 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
       const data = await res.json();
       runIdRef.current = data.runId;
+      setActiveRunId(data.runId);
 
       // Connect to SSE for live logs/events
       connectSSE(data.runId);
     } catch (err) {
       runIdRef.current = null;
+      setActiveRunId(null);
       showToast(err.message, 'error');
       setStatus('idle');
       if (onRunningChange) onRunningChange(false);
@@ -252,7 +257,8 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
   // ── Stop Test ─────────────────────────────────────────
   const handleStop = async () => {
-    if (!runIdRef.current) {
+    const runId = activeRunId || runIdRef.current;
+    if (!runId) {
       showToast('Test is still starting. Please wait a moment.', 'error');
       return;
     }
@@ -260,7 +266,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
     try {
       const res = await authFetch('/api/runner/stop', {
         method: 'POST',
-        body: JSON.stringify({ runId: runIdRef.current })
+        body: JSON.stringify({ runId })
       });
       let reportFile;
 
@@ -282,6 +288,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
         eventSourceRef.current = null;
       }
       runIdRef.current = null;
+      setActiveRunId(null);
 
       if (onNavigateToReport) {
         onNavigateToReport(reportFile);
@@ -342,7 +349,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
               <button
                 className="btn-stop"
                 onClick={handleStop}
-                disabled={!runIdRef.current}
+                disabled={!activeRunId}
                 id="stop-btn"
               >
                 <span className="btn-icon">⏹</span>

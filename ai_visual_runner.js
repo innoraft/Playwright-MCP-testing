@@ -28,6 +28,12 @@ const runId = process.env.PLAYWRIGHT_RUN_ID?.trim() || '';
 const runScreenshotsDir = runId ? `files/screenshots/${runId}` : 'files/screenshots';
 const runDiffsDir = runId ? `files/diffs/${runId}` : 'files/diffs';
 
+function getVisualScreenshotFilename(testName, breakpoint) {
+  const safeName = testName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeBreakpoint = String(breakpoint || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `${safeName}_${safeBreakpoint}.png`;
+}
+
 const config = {
   llm: {
     provider: llmConfig.provider,
@@ -362,15 +368,15 @@ class VisualMCPRunner {
   }
 
   executeVisualRegressionStep(step, originalStep, testName) {
-    let { breakpoint, screenshotPath } = step.params;
+    const { breakpoint } = step.params;
+    const vrTestName = this.logicalTestName || testName;
+    const screenshotPath = path.join(
+      config.reporting.screenshotsDir,
+      getVisualScreenshotFilename(vrTestName, breakpoint)
+    );
     const start = Date.now();
 
-    if (screenshotPath && !screenshotPath.startsWith('files/') && !screenshotPath.startsWith('./files/')) {
-      screenshotPath = path.join(config.reporting.screenshotsDir, path.basename(screenshotPath));
-    }
-
     try {
-      const vrTestName = this.logicalTestName || testName;
       const result = this.visualChecker.runRegressionStep(vrTestName, breakpoint, screenshotPath);
 
       this.recordAction({
@@ -498,8 +504,11 @@ class VisualMCPRunner {
         continue;
       }
 
-      if (toolName === 'browser_take_screenshot' && step.params?.filename) {
-        step.params.filename = step.params.filename.replace(/^\.?\/?(files\/)+/, '');
+      if (toolName === 'browser_take_screenshot') {
+        const breakpoint = step.params?.breakpoint
+          || step.params?.filename?.match(/(\d+px)\b/i)?.[1]
+          || originalStep.match(/(\d+px)\b/i)?.[1];
+        step.params.filename = getVisualScreenshotFilename(this.logicalTestName, breakpoint);
       }
 
       try {

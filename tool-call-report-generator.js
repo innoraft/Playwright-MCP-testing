@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "url";
 
 /**
@@ -23,7 +24,7 @@ export function generateHtmlReport({
   const now = new Date();
   const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const safeName = suiteName.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
-  const fileName = `${safeName}-${timestamp}.html`;
+  const fileName = `${safeName}-${timestamp}-${randomUUID()}.html`;
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
 

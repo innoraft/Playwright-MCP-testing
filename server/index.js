@@ -1088,36 +1088,15 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       if (state.reportFile) {
         setOwner('reports', state.reportFile, currentUserId);
       }
-      // Attribute generated files created during this run.
-      // This includes screenshots/diffs and downloaded/uploaded assets.
-      const runStart = state.startedAt || 0;
-      for (const subdir of ['screenshots', 'diffs', 'uploads', 'Downloads', 'downloads']) {
-        const dirPath = path.join(FILES_DIR, subdir);
-        if (fs.existsSync(dirPath)) {
-          const newFiles = listFilesRecursively(dirPath)
-            .filter(f => {
-              try {
-                return fs.statSync(path.join(dirPath, f)).mtimeMs >= runStart;
-              } catch { return false; }
-            });
-          for (const f of newFiles) {
-            setOwner('files', `${subdir}/${f}`, currentUserId);
-          }
-        }
-      }
+      // Attribute only files in directories dedicated to this run. Shared
+      // directories cannot be assigned safely with an mtime window when runs overlap.
+      for (const subdir of ['screenshots', 'diffs', 'Downloads', 'downloads']) {
+        const runDir = path.join(FILES_DIR, subdir, currentRunId);
+        if (!fs.existsSync(runDir)) continue;
 
-      // Some tools can save downloads directly under /files root.
-      const rootFiles = fs.readdirSync(FILES_DIR, { withFileTypes: true })
-        .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
-        .filter(entry => {
-          try {
-            return fs.statSync(path.join(FILES_DIR, entry.name)).mtimeMs >= runStart;
-          } catch {
-            return false;
-          }
-        });
-      for (const entry of rootFiles) {
-        setOwner('files', entry.name, currentUserId);
+        for (const file of listFilesRecursively(runDir)) {
+          setOwner('files', `${subdir}/${currentRunId}/${file}`, currentUserId);
+        }
       }
     }
 

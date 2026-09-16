@@ -20,6 +20,7 @@ const __rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 const MCP_COMMAND = process.env.MCP_COMMAND ?? "npx";
 const MCP_WORKSPACE_DIR = process.env.MCP_WORKSPACE_DIR ?? process.cwd();
+const PLAYWRIGHT_RUN_ID = process.env.PLAYWRIGHT_RUN_ID?.trim() || "";
 const MCP_CDP_ENDPOINT = process.env.MCP_CDP_ENDPOINT;
 const MCP_OUTPUT_DIR = process.env.MCP_OUTPUT_DIR ?? "files/screenshots";
 const VIEWPORT_WIDTH = process.env.PLAYWRIGHT_VIEWPORT_WIDTH ?? "1440";
@@ -371,7 +372,7 @@ function collectChunkScreenshotsByStep(outputDir, chunkStartMs, chunkStepNumbers
 
 // MCP always names its own screenshot/PDF/trace output "page-<ISO timestamp>.<ext>".
 // Anything else in the output dir is a real browser download (any file type: image, video, pdf, zip...).
-const MCP_GENERATED_FILE_RE = /^page-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z\.[a-z0-9]+$/i;
+const MCP_GENERATED_FILE_RE = /^(?:page-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z|step-\d+-[^.]+)\.[a-z0-9]+$/i;
 
 /**
  * The MCP server saves every file it produces (screenshots, PDFs and
@@ -818,7 +819,10 @@ async function main() {
   } finally {
     await mcpServer.close();
     if (cdpService) await cdpService.shutdown();
-    moveDownloadedFiles(screenshotsOutputDir, path.resolve(MCP_WORKSPACE_DIR, "Downloads"));
+      const downloadsDir = PLAYWRIGHT_RUN_ID
+        ? path.resolve(MCP_WORKSPACE_DIR, "Downloads", PLAYWRIGHT_RUN_ID)
+        : path.resolve(MCP_WORKSPACE_DIR, "Downloads");
+      moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
   }
 }
 
