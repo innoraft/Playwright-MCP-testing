@@ -125,12 +125,27 @@ export default function Reports({ initialReport }) {
 
   // ── Friendly report name ──────────────────────────────
   const friendlyName = (name) => {
-    const ts = name.match(/(\d{10,})/);
-    if (ts) {
-      const d = new Date(parseInt(ts[1]));
+    const reportName = name.replace(/\.html$/i, '');
+    const timestampMatch = reportName.match(/-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:-|$)/i);
+    if (timestampMatch) {
+      const timestamp = timestampMatch[1].replace(
+        /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/,
+        '$1T$2:$3:$4'
+      );
+      const d = new Date(timestamp);
+      const rawTestName = reportName.slice(0, timestampMatch.index);
+      const testName = rawTestName
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, character => character.toUpperCase());
+      return `${testName || 'Report'} — ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    const legacyTimestamp = reportName.match(/(\d{10,})/);
+    if (legacyTimestamp) {
+      const d = new Date(parseInt(legacyTimestamp[1], 10));
       return `Report — ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
     }
-    return name.replace('.html', '');
+    return reportName;
   };
 
   const normalizeResult = (value) => {

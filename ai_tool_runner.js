@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import * as yaml from "js-yaml";
 import { z } from "zod";
 import { setMaxListeners } from "node:events";
-import { execSync } from "child_process";
 import { Agent, run } from "@openai/agents";
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -21,6 +20,7 @@ const __rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 const MCP_COMMAND = process.env.MCP_COMMAND ?? "npx";
 const MCP_WORKSPACE_DIR = process.env.MCP_WORKSPACE_DIR ?? process.cwd();
+const PLAYWRIGHT_RUN_ID = process.env.PLAYWRIGHT_RUN_ID?.trim() || "";
 const MCP_CDP_ENDPOINT = process.env.MCP_CDP_ENDPOINT;
 const MCP_OUTPUT_DIR = process.env.MCP_OUTPUT_DIR ?? "files/screenshots";
 const VIEWPORT_WIDTH = process.env.PLAYWRIGHT_VIEWPORT_WIDTH ?? "1440";
@@ -29,7 +29,6 @@ const MCP_BROWSER = process.env.MCP_BROWSER?.trim();
 const MCP_ISOLATED = (process.env.MCP_ISOLATED ?? "true").toLowerCase() === "true";
 const MCP_HEADLESS = (process.env.MCP_HEADLESS ?? "false").toLowerCase() === "true";
 const CHUNK_SIZE = Number(process.env.CHUNK_SIZE) || 5;
-const PRE_EXEC_STEPS = 2;
 const PRE_NAV_WAIT_SECONDS = Number(process.env.PRE_NAV_WAIT_SECONDS) || 10;
 
 const EXECUTOR_INSTRUCTIONS = fs.readFileSync(
@@ -371,6 +370,47 @@ function collectChunkScreenshotsByStep(outputDir, chunkStartMs, chunkStepNumbers
   return byStep;
 }
 
+// MCP always names its own screenshot/PDF/trace output "page-<ISO timestamp>.<ext>".
+// Anything else in the output dir is a real browser download (any file type: image, video, pdf, zip...).
+const MCP_GENERATED_FILE_RE = /^(?:page-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z|step-\d+-[^.]+)\.[a-z0-9]+$/i;
+
+/**
+ * The MCP server saves every file it produces (screenshots, PDFs and
+ * browser downloads) into the same --output-dir. Move anything that
+ * isn't MCP's own generated output into files/Downloads so downloaded
+ * files show up where users expect them, regardless of file type.
+ */
+function moveDownloadedFiles(outputDir, downloadsDir) {
+  try {
+    if (!fs.existsSync(outputDir)) return;
+
+    const downloadedFiles = fs
+      .readdirSync(outputDir)
+      .filter((f) => !MCP_GENERATED_FILE_RE.test(f))
+      .map((f) => path.join(outputDir, f))
+      .filter((f) => fs.statSync(f).isFile());
+
+    if (downloadedFiles.length === 0) return;
+
+    fs.mkdirSync(downloadsDir, { recursive: true });
+
+    for (const filePath of downloadedFiles) {
+      const ext = path.extname(filePath);
+      const base = path.basename(filePath, ext);
+      let destPath = path.join(downloadsDir, `${base}${ext}`);
+      let suffix = 1;
+      while (fs.existsSync(destPath)) {
+        destPath = path.join(downloadsDir, `${base}_${suffix}${ext}`);
+        suffix += 1;
+      }
+      fs.renameSync(filePath, destPath);
+      console.log(`  📥 Download saved: ${path.relative(MCP_WORKSPACE_DIR, destPath)}`);
+    }
+  } catch (err) {
+    console.error(`  ⚠️ Failed to move downloaded files:`, err.message ?? err);
+  }
+}
+
 /**
  * Try to find a screenshot file from the output directory for the most recent capture.
  */
@@ -394,79 +434,6 @@ function findLatestScreenshot(outputDir) {
   } catch {
     return null;
   }
-}
-
-/**
- * Execute first steps directly with MCP (without LLM tokens):
- * 1) navigate to baseUrl
- * 2) wait for configured seconds
- */
-async function executePreAgentSteps({ server, steps, baseUrl }) {
-  const results = [];
-  const totalToRun = Math.min(PRE_EXEC_STEPS, steps.length);
-
-  if (totalToRun === 0) {
-    return { results, failed: false };
-  }
-
-  // Step 1: Navigate
-  if (totalToRun >= 1) {
-    try {
-      if (!baseUrl) {
-        throw new Error("baseUrl missing");
-      }
-      await server.callTool("browser_navigate", { url: baseUrl });
-      results.push({
-        stepNumber: 1,
-        stepText: steps[0],
-        status: "passed",
-        reason: "Navigated",
-        screenshotBase64: null,
-        durationMs: null,
-      });
-      console.log(`  ✅ Step 1 executed directly: navigation`);
-    } catch (err) {
-      const screenshotBase64 = await captureFailureScreenshot(server);
-      results.push({
-        stepNumber: 1,
-        stepText: steps[0],
-        status: "failed",
-        reason: `Pre-step failed: ${err instanceof Error ? err.message : String(err)}`,
-        screenshotBase64,
-        durationMs: null,
-      });
-      return { results, failed: true };
-    }
-  }
-
-  // Step 2: Wait
-  if (totalToRun >= 2) {
-    try {
-      await server.callTool("browser_wait_for", { time: PRE_NAV_WAIT_SECONDS });
-      results.push({
-        stepNumber: 2,
-        stepText: steps[1],
-        status: "passed",
-        reason: `Waited ${PRE_NAV_WAIT_SECONDS}s`,
-        screenshotBase64: null,
-        durationMs: null,
-      });
-      console.log(`  ✅ Step 2 executed directly: wait ${PRE_NAV_WAIT_SECONDS}s`);
-    } catch (err) {
-      const screenshotBase64 = await captureFailureScreenshot(server);
-      results.push({
-        stepNumber: 2,
-        stepText: steps[1],
-        status: "failed",
-        reason: `Pre-step failed: ${err instanceof Error ? err.message : String(err)}`,
-        screenshotBase64,
-        durationMs: null,
-      });
-      return { results, failed: true };
-    }
-  }
-
-  return { results, failed: false };
 }
 
 // Main
@@ -552,9 +519,18 @@ async function main() {
     // Force Playwright to initialize the context/page before screencast attaches
     await mcpServer.callTool("browser_navigate", { url: "about:blank" }).catch(() => {});
     await cdpService.startScreencast();
+
+    if (baseUrl) {
+      console.log(`[Setup] Navigating to base URL: ${baseUrl}`);
+      await mcpServer.callTool("browser_navigate", { url: baseUrl });
+      if (PRE_NAV_WAIT_SECONDS > 0) {
+        console.log(`[Setup] Waiting ${PRE_NAV_WAIT_SECONDS}s for initial page load...`);
+        await mcpServer.callTool("browser_wait_for", { time: PRE_NAV_WAIT_SECONDS });
+      }
+    }
   } catch (error) {
     console.error(
-      `❌ Failed to connect to MCP server:`,
+      `❌ Failed to connect to MCP server or load base URL:`,
       error instanceof Error ? error.message : error
     );
     process.exit(1);
@@ -606,16 +582,6 @@ async function main() {
   process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 
   try {
-    console.log(`[Pre-Agent] Executing first ${Math.min(PRE_EXEC_STEPS, steps.length)} step(s) directly...`);
-    const preExec = await executePreAgentSteps({ server: mcpServer, steps, baseUrl });
-    allResults.push(...preExec.results);
-
-    if (preExec.failed) {
-      shouldStop = true;
-      console.log(`[Pre-Agent] Stopping run because a pre-agent step failed.`);
-    }
-
-    // const remainingSteps = steps.slice(PRE_EXEC_STEPS);
     const chunks = chunkSteps(steps, CHUNK_SIZE);
 
     console.log(`[Agent] Executing ${chunks.length} chunk(s) of steps (max ${CHUNK_SIZE} per chunk)...\n`);
@@ -625,7 +591,7 @@ async function main() {
 
       const chunk = chunks[chunkIdx];
       const isFinalChunk = chunkIdx === chunks.length - 1;
-      const startStepNum = PRE_EXEC_STEPS + chunkIdx * CHUNK_SIZE + 1;
+      const startStepNum = chunkIdx * CHUNK_SIZE + 1;
       const endStepNum = startStepNum + chunk.length - 1;
       const chunkStartTime = Date.now();
       const chunkStepNumbers = chunk.map((_, i) => startStepNum + i);
@@ -844,6 +810,7 @@ async function main() {
       totalDurationMs,
     });
     console.log(`📄 HTML Report saved: ${reportPath}\n`);
+    console.log(`__REPORT_FILE__${path.basename(reportPath)}`);
   } catch (error) {
     console.error(`\n❌ Agent execution failed:`, error instanceof Error ? error.message : error);
     if (error instanceof Error && error.stack) {
@@ -852,6 +819,10 @@ async function main() {
   } finally {
     await mcpServer.close();
     if (cdpService) await cdpService.shutdown();
+      const downloadsDir = PLAYWRIGHT_RUN_ID
+        ? path.resolve(MCP_WORKSPACE_DIR, "Downloads", PLAYWRIGHT_RUN_ID)
+        : path.resolve(MCP_WORKSPACE_DIR, "Downloads");
+      moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
   }
 }
 

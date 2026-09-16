@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +21,7 @@ export class TestReportGenerator {
    * @param {Object} config.reporting - Reporting configuration
    * @param {string} config.reporting.outputDir - Directory for generated HTML reports
    * @param {string} config.reporting.screenshotsDir - Directory for screenshots
+  * @param {string} [config.reporting.runId] - Unique identifier for the current test run
    */
   constructor(config) {
     this.config = config || {
@@ -51,9 +53,10 @@ export class TestReportGenerator {
     const safeName = (testReport.testName || 'unnamed_suite')
       .replace(/[^a-zA-Z0-9_-]/g, '_')
       .toLowerCase();
+    const runId = this.config.reporting.runId || randomUUID();
     const htmlReportFile = path.join(
       this.config.reporting.outputDir,
-      `${safeName}-${timestamp}.html`
+      `${safeName}-${timestamp}-${runId}.html`
     );
 
     this.ensureDirectories();
