@@ -9,7 +9,7 @@ import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { generateHtmlReport } from "./tool-call-report-generator.js";
 import { CDPService } from './src/cdp/cdp.service.js';
-import llmConfig from './config/llm.config.js';
+import * as settingsRepo from './server/db/repositories/settingsRepo.js';
 import { findChromiumPath } from './src/utils/browser-utils.js';
 
 setMaxListeners(50);
@@ -260,6 +260,25 @@ function chunkSteps(steps, chunkSize = CHUNK_SIZE) {
   return chunks;
 }
 
+function getUserFriendlyStepFailure(errorMessage) {
+  const message = String(errorMessage || '').toLowerCase();
+
+  if (message.includes('timeout')) {
+    return 'The page took too long to respond. Check your internet connection or confirm that the page and requested element are available.';
+  }
+  if (message.includes('locator') || message.includes('selector') || message.includes('not found')) {
+    return 'The requested element could not be found on the page. Check that the page loaded correctly and that the element details are accurate.';
+  }
+  if (message.includes('navigation') || message.includes('net::err_')) {
+    return 'The browser could not open or load the requested page. Check that the URL is correct and reachable.';
+  }
+  if (message.includes('download')) {
+    return 'The file could not be downloaded. Check that the download link is available and that the server returned the file.';
+  }
+
+  return 'The browser could not complete this step. Check the page state, requested action, and any data supplied to the step.';
+}
+
 /**
  * Programmatic screenshot capture as fallback when agent doesn't take one.
  * Returns base64 data URI or null.
@@ -439,9 +458,10 @@ function findLatestScreenshot(outputDir) {
 // Main
 
 async function main() {
+  const llmConfig = await settingsRepo.getLlmConfig();
   const configuredApiKey = llmConfig?.apiKey;
   if (!configuredApiKey) {
-    console.error('❌ Missing OpenAI API key. Set apiKey in config/llm.config.js.');
+    console.error('❌ Missing OpenAI API key. Set apiKey in the LLM Config admin page.');
     process.exit(1);
   }
   // OpenAI Agents SDK reads OPENAI_API_KEY from process env.
@@ -540,6 +560,7 @@ async function main() {
   const allResults = [];
   const runStartTime = Date.now();
   const screenshotsOutputDir = path.resolve(MCP_WORKSPACE_DIR, MCP_OUTPUT_DIR);
+  let reportFileBaseName = null;
   let shouldStop = false;
 
   // Graceful shutdown handler — generates partial report on interrupt
@@ -568,6 +589,7 @@ async function main() {
         results: allResults,
         totalDurationMs: Date.now() - runStartTime,
       });
+      reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
       console.log(`📄 Partial report saved: ${reportPath}`);
     } catch (err) {
       console.error(`Failed to generate partial report:`, err.message);
@@ -755,7 +777,7 @@ async function main() {
           stepNumber: startStepNum,
           stepText: chunk[0],
           status: "failed",
-          reason: `Chunk execution error: ${message}`,
+          reason: getUserFriendlyStepFailure(message),
           screenshotBase64,
           durationMs: Date.now() - chunkStartTime,
         });
@@ -809,6 +831,7 @@ async function main() {
       results: allResults,
       totalDurationMs,
     });
+    reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
     console.log(`📄 HTML Report saved: ${reportPath}\n`);
     console.log(`__REPORT_FILE__${path.basename(reportPath)}`);
   } catch (error) {
@@ -819,10 +842,15 @@ async function main() {
   } finally {
     await mcpServer.close();
     if (cdpService) await cdpService.shutdown();
-      const downloadsDir = PLAYWRIGHT_RUN_ID
-        ? path.resolve(MCP_WORKSPACE_DIR, "Downloads", PLAYWRIGHT_RUN_ID)
-        : path.resolve(MCP_WORKSPACE_DIR, "Downloads");
-      moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
+    const fallbackFolderName = `${suiteName
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .toLowerCase()}-${new Date(runStartTime).toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
+    const downloadsDir = path.resolve(
+      MCP_WORKSPACE_DIR,
+      "Downloads",
+      reportFileBaseName || fallbackFolderName
+    );
+    moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
   }
 }
 

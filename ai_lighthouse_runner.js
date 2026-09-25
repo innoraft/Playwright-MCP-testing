@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { Agent, run } from '@openai/agents';
 import { z } from 'zod';
-import llmConfig from './config/llm.config.js';
+import * as settingsRepo from './server/db/repositories/settingsRepo.js';
 import { PerformanceReportGenerator } from './performance-report-generator.js';
 import { runLighthouseAudit } from './src/perf/lighthouse-runner.js';
 import { buildPerfSuggestionsSystemPrompt, buildPerfSuggestionsUserMessage } from './src/prompts/perf-ai-suggestions.prompt.js';
@@ -21,6 +21,7 @@ import { findChromiumPath } from './src/utils/browser-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const llmConfig = await settingsRepo.getLlmConfig();
 const config = {
   llm: {
     provider: llmConfig.provider,

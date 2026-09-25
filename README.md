@@ -16,6 +16,7 @@ A powerful, AI-driven test automation framework that combines the Model Context 
 ## 📋 Prerequisites
 
 - Node.js (v16 or higher)
+- PostgreSQL (v13 or higher)
 - OpenAI API key
 - Modern web browser (Chrome/Firefox/Safari)
 
@@ -33,20 +34,31 @@ npm install
 cd client && npm install
 ```
 
-3. **Configure your LLM provider** — open `config/llm.config.js` and add your API key:
+3. **Configure your LLM provider** — sign in as an administrator and use the
+   LLM Configuration page. Settings are stored in PostgreSQL.
 
-```javascript
-const llmConfig = {
-  provider: 'openai',
-  model: '', // Use new models (e.g. gpt-5.1-codex-max or gpt-5)
-  apiKey: 'your-api-key-here',
-  temperature: 1
-};
+### Configure PostgreSQL connection
 
-export default llmConfig;
+Set environment variables before starting the backend:
+
+```bash
+export PGHOST=127.0.0.1
+export PGPORT=5432
+export PGUSER=postgres
+export PGPASSWORD=postgres
+export PGDATABASE=playwright_mcp
+export PGSSL=false
 ```
 
-> No Docker, database, or cloud account required to get started.
+Create the database once (if not already created):
+
+```bash
+createdb -U postgres playwright_mcp
+```
+
+The PostgreSQL schema must already exist before starting the server. The server
+connects directly to PostgreSQL and does not import legacy files or run migration
+scripts at startup.
 
 ### Starting the Platform
 

@@ -41,13 +41,6 @@ files/screenshots/*
 !files/screenshots/.gitkeep
 
 # --------------------
-# Config (sensitive / per-deployment)
-# --------------------
-config/llm.config.json
-config/users.json
-config/ownership.json
-
-# --------------------
 # Build output
 # --------------------
 client/dist/
