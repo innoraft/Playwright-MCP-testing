@@ -26,12 +26,14 @@ import {
   removeOwner,
   setOwnerBulk,
   getOwnedFilenames,
-  isOwnerOrAdmin,
-  migrateExistingFiles
+  isOwnerOrAdmin
 } from './ownership.js';
+import * as settingsRepo from './db/repositories/settingsRepo.js';
+import * as testsMetaRepo from './db/repositories/testsMetaRepo.js';
+import * as reportsMetaRepo from './db/repositories/reportsMetaRepo.js';
+import * as runHistoryRepo from './db/repositories/runHistoryRepo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = path.join(__dirname, '..', 'config', 'llm.config.js');
 const TESTS_DIR = path.join(__dirname, '..', 'tests');
 const REPORTS_DIR = path.join(__dirname, '..', 'test-reports');
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -182,8 +184,8 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ── GET /api/auth/me ───────────────────────────────────────
-app.get('/api/auth/me', requireAuth, (req, res) => {
-  const user = getUserById(req.user.userId);
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user = await getUserById(req.user.userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -226,14 +228,14 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // ── POST /api/auth/forgot-password ───────────────────────
-app.post('/api/auth/forgot-password', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { username } = req.body;
     if (!username) {
       return res.status(400).json({ error: 'Username is required' });
     }
 
-    const result = requestPasswordReset(username);
+    const result = await requestPasswordReset(username);
     // Always return success to avoid username enumeration
     res.json({
       success: true,
@@ -249,8 +251,8 @@ app.post('/api/auth/forgot-password', (req, res) => {
 });
 
 // ── GET /api/users/reset-requests (Admin) ───────────────
-app.get('/api/users/reset-requests', requireAuth, requireAdminRole, (req, res) => {
-  res.json(getResetRequests());
+app.get('/api/users/reset-requests', requireAuth, requireAdminRole, async (req, res) => {
+  res.json(await getResetRequests());
 });
 
 // ── POST /api/users/:id/admin-reset (Admin) ─────────────
@@ -260,12 +262,12 @@ app.post('/api/users/:id/admin-reset', requireAuth, requireAdminRole, async (req
     if (!newPassword || newPassword.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
-    const user = getUserById(req.params.id);
+    const user = await getUserById(req.params.id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     await updateUser(req.params.id, { password: newPassword });
-    clearResetRequest(req.params.id);
+    await clearResetRequest(req.params.id);
     console.log(`🛡️ Admin reset password for user: ${user.username}`);
     res.json({ success: true, message: `Password reset for ${user.username}` });
   } catch (err) {
@@ -275,9 +277,9 @@ app.post('/api/users/:id/admin-reset', requireAuth, requireAdminRole, async (req
 });
 
 // ── DELETE /api/users/:id/reset-request (Admin) ─────────
-app.delete('/api/users/:id/reset-request', requireAuth, requireAdminRole, (req, res) => {
+app.delete('/api/users/:id/reset-request', requireAuth, requireAdminRole, async (req, res) => {
   try {
-    clearResetRequest(req.params.id);
+    await clearResetRequest(req.params.id);
     res.json({ success: true, message: 'Reset request dismissed' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -285,8 +287,13 @@ app.delete('/api/users/:id/reset-request', requireAuth, requireAdminRole, (req, 
 });
 
 // ── GET /api/users ─────────────────────────────────────────
-app.get('/api/users', requireAuth, requireAdminRole, (req, res) => {
-  res.json(getAllUsers());
+app.get('/api/users', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    res.json(await getAllUsers());
+  } catch (err) {
+    console.error('Failed to list users:', err);
+    res.status(500).json({ error: 'Failed to list users' });
+  }
 });
 
 // ── POST /api/users ────────────────────────────────────────
@@ -323,7 +330,7 @@ app.put('/api/users/:id', requireAuth, requireAdminRole, async (req, res) => {
 // ── PUT /api/users/:id/toggle-active ───────────────────────
 app.put('/api/users/:id/toggle-active', requireAuth, requireAdminRole, async (req, res) => {
   try {
-    const user = getUserById(req.params.id);
+    const user = await getUserById(req.params.id);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -335,54 +342,28 @@ app.put('/api/users/:id/toggle-active', requireAuth, requireAdminRole, async (re
   }
 });
 
-// ── Helper: Read config from llm.config.js ─────────────────
-function readConfig() {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    // Parse the JS object literal out of: const llmConfig = { ... };
-    const match = raw.match(/const\s+llmConfig\s*=\s*(\{[\s\S]*?\});/);
-    if (!match) {
-      return { provider: 'openai', model: 'gpt-5', apiKey: '', temperature: 1 };
-    }
-    // Use Function constructor to safely evaluate the object literal
-    const config = new Function(`return ${match[1]}`)();
-    return config;
-  } catch {
-    return { provider: 'openai', model: 'gpt-5', apiKey: '', temperature: 1 };
-  }
-}
-
-// ── Helper: Write config to llm.config.js ──────────────────
-function writeConfig(data) {
-  const jsContent = `const llmConfig = {
-  provider: '${data.provider}',
-  model: '${data.model}',
-  apiKey: ${JSON.stringify(data.apiKey || '')},
-  temperature: ${data.temperature !== undefined ? Number(data.temperature) : 1}
-};
-
-export default llmConfig
-`;
-  fs.writeFileSync(CONFIG_PATH, jsContent, 'utf-8');
-}
-
 // ══════════════════════════════════════════════════════════
 //  LLM CONFIG ENDPOINTS
 // ══════════════════════════════════════════════════════════
 
 // ── GET /api/llm-config ────────────────────────────────────
-app.get('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
-  const config = readConfig();
-  res.json({
-    provider: config.provider,
-    model: config.model,
-    apiKey: config.apiKey,
-    temperature: config.temperature
-  });
+app.get('/api/llm-config', requireAuth, requireAdminRole, async (req, res) => {
+  try {
+    const config = await settingsRepo.getLlmConfig();
+    res.json({
+      provider: config.provider,
+      model: config.model,
+      apiKey: config.apiKey,
+      temperature: config.temperature
+    });
+  } catch (err) {
+    console.error('Failed to read config:', err);
+    res.status(500).json({ error: 'Failed to read configuration' });
+  }
 });
 
 // ── POST /api/llm-config ───────────────────────────────────
-app.post('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
+app.post('/api/llm-config', requireAuth, requireAdminRole, async (req, res) => {
   const { provider, model, apiKey, temperature } = req.body;
 
   if (!provider || !model) {
@@ -397,7 +378,7 @@ app.post('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
   };
 
   try {
-    writeConfig(config);
+    await settingsRepo.setLlmConfig(config);
     res.json({ success: true, message: 'LLM configuration saved successfully' });
   } catch (err) {
     console.error('Failed to save config:', err);
@@ -414,14 +395,14 @@ app.post('/api/llm-config', requireAuth, requireAdminRole, (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 // ── GET /api/baselines ─────────────────────────────────────
-app.get('/api/baselines', requireAuth, (req, res) => {
+app.get('/api/baselines', requireAuth, async (req, res) => {
   try {
     if (!fs.existsSync(BASELINES_DIR)) {
       return res.json([]);
     }
 
     const isAdmin = reqIsAdmin(req);
-    const ownedFiles = new Set(getOwnedFilenames('baselines', req.user.userId, isAdmin));
+    const ownedFiles = new Set(await getOwnedFilenames('baselines', req.user.userId, isAdmin));
 
     const files = fs.readdirSync(BASELINES_DIR)
       .filter(f => /\.(png|jpg|jpeg)$/i.test(f))
@@ -447,7 +428,7 @@ app.get('/api/baselines', requireAuth, (req, res) => {
 });
 
 // ── POST /api/baselines/upload ─────────────────────────────
-app.post('/api/baselines/upload', requireAuth, upload.single('image'), (req, res) => {
+app.post('/api/baselines/upload', requireAuth, upload.single('image'), async (req, res) => {
   try {
     const { testName, breakpoint } = req.body;
 
@@ -482,7 +463,7 @@ app.post('/api/baselines/upload', requireAuth, upload.single('image'), (req, res
     fs.writeFileSync(filePath, req.file.buffer);
 
     // Track ownership
-    setOwner('baselines', filename, req.user.userId);
+    await setOwner('baselines', filename, req.user.userId);
 
     res.json({
       success: true,
@@ -497,7 +478,7 @@ app.post('/api/baselines/upload', requireAuth, upload.single('image'), (req, res
 });
 
 // ── DELETE /api/baselines/:filename ────────────────────────
-app.delete('/api/baselines/:filename', requireAuth, (req, res) => {
+app.delete('/api/baselines/:filename', requireAuth, async (req, res) => {
   try {
     const fileName = req.params.filename;
 
@@ -511,6 +492,7 @@ app.delete('/api/baselines/:filename', requireAuth, (req, res) => {
     }
 
     fs.unlinkSync(filePath);
+    await removeOwner('baselines', fileName);
     res.json({ success: true, message: `Deleted ${fileName}` });
   } catch (err) {
     console.error('Failed to delete baseline:', err);
@@ -520,14 +502,14 @@ app.delete('/api/baselines/:filename', requireAuth, (req, res) => {
 
 // ── GET /api/tests ─────────────────────────────────────────
 // List test files owned by the current user (admin sees all)
-app.get('/api/tests', requireAuth, (req, res) => {
+app.get('/api/tests', requireAuth, async (req, res) => {
   try {
     if (!fs.existsSync(TESTS_DIR)) {
       fs.mkdirSync(TESTS_DIR, { recursive: true });
     }
 
     const isAdmin = reqIsAdmin(req);
-    const ownedFiles = new Set(getOwnedFilenames('tests', req.user.userId, isAdmin));
+    const ownedFiles = new Set(await getOwnedFilenames('tests', req.user.userId, isAdmin));
 
     const files = fs.readdirSync(TESTS_DIR)
       .filter(f => f.endsWith('.test.yml'))
@@ -554,14 +536,14 @@ app.get('/api/tests', requireAuth, (req, res) => {
 
 // ── GET /api/tests/:name ───────────────────────────────────
 // Read a single test file (must be owner or admin)
-app.get('/api/tests/:name', requireAuth, (req, res) => {
+app.get('/api/tests/:name', requireAuth, async (req, res) => {
   try {
     const fileName = req.params.name;
     if (fileName.includes('..') || fileName.includes('/')) {
       return res.status(400).json({ error: 'Invalid file name' });
     }
 
-    if (!isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req))) {
+    if (!(await isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req)))) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -584,7 +566,7 @@ app.get('/api/tests/:name', requireAuth, (req, res) => {
 // • Edit      → client sends `oldName` (the original filename)
 //               so the guard skips that file and if the name
 //               changed the old file is deleted after saving.
-app.post('/api/tests', requireAuth, (req, res) => {
+app.post('/api/tests', requireAuth, async (req, res) => {
   try {
     const { name, content, oldName } = req.body;
 
@@ -654,14 +636,16 @@ app.post('/api/tests', requireAuth, (req, res) => {
     fs.writeFileSync(filePath, content, 'utf-8');
 
     // Track ownership — creator owns it
-    setOwner('tests', fileName, req.user.userId);
+    await setOwner('tests', fileName, req.user.userId);
+    await testsMetaRepo.upsertTestMeta({ name: fileName, type: detectTestType(content), ownerId: req.user.userId });
 
     // If the name changed during an edit, delete the old file
     if (oldFileName && normalize(oldFileName) !== normalize(fileName)) {
       const oldPath = path.join(TESTS_DIR, oldFileName);
       if (fs.existsSync(oldPath)) {
         fs.unlinkSync(oldPath);
-        removeOwner('tests', oldFileName);
+        await removeOwner('tests', oldFileName);
+        await testsMetaRepo.deleteTestMeta(oldFileName);
       }
     }
 
@@ -674,7 +658,7 @@ app.post('/api/tests', requireAuth, (req, res) => {
 
 // ── DELETE /api/tests/:name ────────────────────────────────
 // Delete a test file (must be owner or admin)
-app.delete('/api/tests/:name', requireAuth, (req, res) => {
+app.delete('/api/tests/:name', requireAuth, async (req, res) => {
   try {
     const fileName = req.params.name;
 
@@ -682,7 +666,7 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Invalid file name' });
     }
 
-    if (!isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req))) {
+    if (!(await isOwnerOrAdmin('tests', fileName, req.user.userId, reqIsAdmin(req)))) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -692,7 +676,8 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
     }
 
     fs.unlinkSync(filePath);
-    removeOwner('tests', fileName);
+    await removeOwner('tests', fileName);
+    await testsMetaRepo.deleteTestMeta(fileName);
     res.json({ success: true, message: `Deleted ${fileName}` });
   } catch (err) {
     console.error('Failed to delete test:', err);
@@ -702,10 +687,10 @@ app.delete('/api/tests/:name', requireAuth, (req, res) => {
 
 // ── DELETE /api/tests ─────────────────────────────────────
 // Delete all visible test files for the current user (must be owner or admin)
-app.delete('/api/tests', requireAuth, (req, res) => {
+app.delete('/api/tests', requireAuth, async (req, res) => {
   try {
     const isAdmin = reqIsAdmin(req);
-    const ownedFiles = new Set(getOwnedFilenames('tests', req.user.userId, isAdmin));
+    const ownedFiles = new Set(await getOwnedFilenames('tests', req.user.userId, isAdmin));
     const deletableFiles = fs.existsSync(TESTS_DIR)
       ? fs.readdirSync(TESTS_DIR)
           .filter((f) => f.endsWith('.test.yml'))
@@ -717,7 +702,8 @@ app.delete('/api/tests', requireAuth, (req, res) => {
       const filePath = path.join(TESTS_DIR, fileName);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-        removeOwner('tests', fileName);
+        await removeOwner('tests', fileName);
+        await testsMetaRepo.deleteTestMeta(fileName);
         deletedCount += 1;
       }
     }
@@ -859,8 +845,7 @@ function getRunnerState(userId, runId) {
   return state?.userId === userId ? state : null;
 }
 
-// Run history — stores completed runs for lookup
-const runHistory = [];
+// Run history — durability handled by runHistoryRepo (Postgres); this array is gone.
 const MAX_HISTORY = 50;
 const completedRunIds = [];
 
@@ -1063,7 +1048,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   });
 
   // Handle process exit
-  child.on('close', (code) => {
+  child.on('close', async (code) => {
     // Flush remaining buffers
     if (stdoutBuffer.trim()) {
       const logType = detectLogType(stdoutBuffer);
@@ -1086,7 +1071,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     if (currentUserId) {
       // Attribute report
       if (state.reportFile) {
-        setOwner('reports', state.reportFile, currentUserId);
+        await setOwner('reports', state.reportFile, currentUserId);
       }
       // Attribute only files in directories dedicated to this run. Shared
       // directories cannot be assigned safely with an mtime window when runs overlap.
@@ -1095,24 +1080,23 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
         if (!fs.existsSync(runDir)) continue;
 
         for (const file of listFilesRecursively(runDir)) {
-          setOwner('files', `${subdir}/${currentRunId}/${file}`, currentUserId);
+          await setOwner('files', `${subdir}/${currentRunId}/${file}`, currentUserId);
         }
       }
     }
 
     // Save to run history
-    runHistory.unshift({
+    await runHistoryRepo.insertRunHistory({
       runId: currentRunId,
       testName: state.testName,
-      userId: currentUserId,
+      ownerId: currentUserId,
       result: state.result,
-      reportFile: state.reportFile,
+      reportFilename: state.reportFile,
       startedAt: state.startedAt,
       finishedAt: Date.now(),
       exitCode: code,
       logCount: state.logBuffer.length
     });
-    if (runHistory.length > MAX_HISTORY) runHistory.pop();
 
     broadcastSSE(currentUserId, currentRunId, 'done', {
       runId: currentRunId,
@@ -1275,12 +1259,15 @@ app.get('/api/runner/status', requireAuth, (req, res) => {
 });
 
 // ── GET /api/runner/history ────────────────────────────────
-app.get('/api/runner/history', requireAuth, (req, res) => {
-  const isAdmin = reqIsAdmin(req);
-  const filtered = isAdmin
-    ? runHistory
-    : runHistory.filter(r => r.userId === req.user.userId);
-  res.json(filtered);
+app.get('/api/runner/history', requireAuth, async (req, res) => {
+  try {
+    const isAdmin = reqIsAdmin(req);
+    const history = await runHistoryRepo.listRunHistory(req.user.userId, isAdmin);
+    res.json(history);
+  } catch (err) {
+    console.error('Failed to load run history:', err);
+    res.status(500).json({ error: 'Failed to load run history' });
+  }
 });
 
 // ══════════════════════════════════════════════════════════
@@ -1374,7 +1361,7 @@ function parseReportMetadata(filePath) {
 }
 
 // ── GET /api/reports ───────────────────────────────────────
-app.get('/api/reports', requireAuth, (req, res) => {
+app.get('/api/reports', requireAuth, async (req, res) => {
   try {
     if (!fs.existsSync(REPORTS_DIR)) {
       fs.mkdirSync(REPORTS_DIR, { recursive: true });
@@ -1382,22 +1369,43 @@ app.get('/api/reports', requireAuth, (req, res) => {
     }
 
     const isAdmin = reqIsAdmin(req);
-    const ownedFiles = new Set(getOwnedFilenames('reports', req.user.userId, isAdmin));
+    const ownedFiles = new Set(await getOwnedFilenames('reports', req.user.userId, isAdmin));
 
-    const reports = fs.readdirSync(REPORTS_DIR)
-      .filter(f => f.endsWith('.html'))
-      .filter(f => isAdmin || ownedFiles.has(f))
-      .map(f => {
-        const stat = fs.statSync(path.join(REPORTS_DIR, f));
-        const meta = parseReportMetadata(path.join(REPORTS_DIR, f));
-        return {
-          name: f,
-          modified: stat.mtimeMs,
-          sizeBytes: stat.size,
-          ...meta
-        };
-      })
-      .sort((a, b) => b.modified - a.modified);
+    const reports = await Promise.all(
+      fs.readdirSync(REPORTS_DIR)
+        .filter(f => f.endsWith('.html'))
+        .filter(f => isAdmin || ownedFiles.has(f))
+        .map(async f => {
+          const stat = fs.statSync(path.join(REPORTS_DIR, f));
+          const meta = parseReportMetadata(path.join(REPORTS_DIR, f));
+
+          // Cache parsed metadata for future lookups; never let a cache failure break the response.
+          reportsMetaRepo
+            .upsertReportMeta({
+              filename: f,
+              ownerId: await getOwner('reports', f),
+              result: meta.result,
+              totalActions: meta.totalActions,
+              passed: meta.passed,
+              failed: meta.failed,
+              successRate: meta.successRate,
+              duration: meta.duration,
+              testName: meta.testName || null,
+              targetUrl: meta.targetUrl || null,
+              generatedAt: meta.generatedAt || null
+            })
+            .catch((err) => console.error('Failed to cache report metadata:', err.message));
+
+          return {
+            name: f,
+            modified: stat.mtimeMs,
+            sizeBytes: stat.size,
+            ...meta
+          };
+        })
+    );
+
+    reports.sort((a, b) => b.modified - a.modified);
 
     res.json(reports);
   } catch (err) {
@@ -1407,7 +1415,7 @@ app.get('/api/reports', requireAuth, (req, res) => {
 });
 
 // ── DELETE /api/reports/:filename ──────────────────────────
-app.delete('/api/reports/:filename', requireAuth, (req, res) => {
+app.delete('/api/reports/:filename', requireAuth, async (req, res) => {
   try {
     const fileName = req.params.filename;
 
@@ -1415,7 +1423,7 @@ app.delete('/api/reports/:filename', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Invalid file name' });
     }
 
-    if (!isOwnerOrAdmin('reports', fileName, req.user.userId, reqIsAdmin(req))) {
+    if (!(await isOwnerOrAdmin('reports', fileName, req.user.userId, reqIsAdmin(req)))) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -1425,7 +1433,8 @@ app.delete('/api/reports/:filename', requireAuth, (req, res) => {
     }
 
     fs.unlinkSync(filePath);
-    removeOwner('reports', fileName);
+    await removeOwner('reports', fileName);
+    await reportsMetaRepo.deleteReportMeta(fileName);
     res.json({ success: true, message: `Deleted ${fileName}` });
   } catch (err) {
     console.error('Failed to delete report:', err);
@@ -1435,10 +1444,10 @@ app.delete('/api/reports/:filename', requireAuth, (req, res) => {
 
 // ── DELETE /api/reports ───────────────────────────────────
 // Delete all visible reports for the current user (must be owner or admin)
-app.delete('/api/reports', requireAuth, (req, res) => {
+app.delete('/api/reports', requireAuth, async (req, res) => {
   try {
     const isAdmin = reqIsAdmin(req);
-    const ownedFiles = new Set(getOwnedFilenames('reports', req.user.userId, isAdmin));
+    const ownedFiles = new Set(await getOwnedFilenames('reports', req.user.userId, isAdmin));
     const deletableFiles = fs.existsSync(REPORTS_DIR)
       ? fs.readdirSync(REPORTS_DIR)
           .filter((f) => f.endsWith('.html'))
@@ -1450,7 +1459,8 @@ app.delete('/api/reports', requireAuth, (req, res) => {
       const filePath = path.join(REPORTS_DIR, fileName);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-        removeOwner('reports', fileName);
+        await removeOwner('reports', fileName);
+        await reportsMetaRepo.deleteReportMeta(fileName);
         deletedCount += 1;
       }
     }
@@ -1517,7 +1527,7 @@ function readDirTree(dirPath, relativeTo) {
 // ── GET /api/files/browse ──────────────────────────────────
 // Browse a specific folder path within the files directory.
 // Query params: ?folder=screenshots/subfolder (optional, defaults to root)
-app.get('/api/files/browse', requireAuth, (req, res) => {
+app.get('/api/files/browse', requireAuth, async (req, res) => {
   try {
     const folder = req.query.folder || '';
 
@@ -1567,9 +1577,9 @@ app.get('/api/files/browse', requireAuth, (req, res) => {
         let hasAccess = isAdmin;
         if (!hasAccess) {
           if (isBaseline) {
-            hasAccess = isOwnerOrAdmin('baselines', entry.name, req.user.userId, false);
+            hasAccess = await isOwnerOrAdmin('baselines', entry.name, req.user.userId, false);
           } else {
-            hasAccess = isOwnerOrAdmin('files', relPath, req.user.userId, false);
+            hasAccess = await isOwnerOrAdmin('files', relPath, req.user.userId, false);
           }
         }
         if (!hasAccess) continue;
@@ -1670,7 +1680,7 @@ app.get('/api/files/preview/{*filePath}', requireAuth, (req, res) => {
 
 // ── DELETE /api/files/:filePath(*) ─────────────────────────
 // Delete a specific file within files directory.
-app.delete('/api/files/delete/{*filePath}', requireAuth, (req, res) => {
+app.delete('/api/files/delete/{*filePath}', requireAuth, async (req, res) => {
   try {
     // Express 5 + path-to-regexp 8.x returns wildcard as array of segments
     const filePath = Array.isArray(req.params.filePath)
@@ -1702,12 +1712,12 @@ app.delete('/api/files/delete/{*filePath}', requireAuth, (req, res) => {
     const isBaseline = filePath.startsWith('baselines/');
     const ownerCategory = isBaseline ? 'baselines' : 'files';
     const ownerKey = isBaseline ? path.basename(filePath) : filePath;
-    if (!isOwnerOrAdmin(ownerCategory, ownerKey, req.user.userId, reqIsAdmin(req))) {
+    if (!(await isOwnerOrAdmin(ownerCategory, ownerKey, req.user.userId, reqIsAdmin(req)))) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     fs.unlinkSync(fullPath);
-    removeOwner(ownerCategory, ownerKey);
+    await removeOwner(ownerCategory, ownerKey);
     res.json({ success: true, message: `Deleted ${filePath}` });
   } catch (err) {
     console.error('Failed to delete file:', err);
@@ -1718,12 +1728,6 @@ app.delete('/api/files/delete/{*filePath}', requireAuth, (req, res) => {
 // ── Start server ───────────────────────────────────────────
 async function startServer() {
   await initializeAuth();
-
-  // Migrate any pre-existing files to admin ownership
-  migrateExistingFiles(
-    { tests: TESTS_DIR, reports: REPORTS_DIR, baselines: BASELINES_DIR, files: FILES_DIR },
-    'admin-001'
-  );
 
   // Global JSON error handler — ensures all unhandled errors return JSON,
   // not Express's default HTML error page.

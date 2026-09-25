@@ -12,6 +12,8 @@ export const MODELS_BY_PROVIDER = {
   openai: [
     { value: 'gpt-5', label: 'GPT-5' },
     { value: 'gpt-5-mini', label: 'GPT-5-mini' },
+    { value: 'gpt-5.6-luna', label: 'GPT-5.6-luna' },
+    { value: 'gpt-6-luna', label: 'GPT-6-luna' },
     { value: 'gpt-4o-mini', label: 'GPT-4o-mini' },
     { value: 'gpt-4.1', label: 'GPT-4.1' },
     { value: 'gpt-5.1-codex-max', label: 'GPT-5.1-codex-max' },

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
-import llmConfig from './config/llm.config.js';
+import * as settingsRepo from './server/db/repositories/settingsRepo.js';
 import { VisualRegressionChecker } from './visual-regression.js';
 import { CDPService } from './src/cdp/cdp.service.js';
 import { buildStaticSystemPrompt } from './src/prompts/system.prompt.js';
@@ -30,8 +30,17 @@ import { runLighthouseAudit } from './src/perf/lighthouse-runner.js';
 import { buildPerfSuggestionsSystemPrompt, buildPerfSuggestionsUserMessage } from './src/prompts/perf-ai-suggestions.prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const runId = process.env.PLAYWRIGHT_RUN_ID?.trim() || '';
+
+function configureVisualAssetPaths(logicalName) {
+  if (!runId) return;
+
+  config.reporting.screenshotsDir = `files/screenshots/${runId}`;
+  config.reporting.diffDir = `files/diffs/${runId}`;
+}
 
 // ---------- CONFIG ----------
+const llmConfig = await settingsRepo.getLlmConfig();
 const config = {
   llm: {
     provider: llmConfig.provider,
@@ -184,7 +193,10 @@ class StatelessMCPRunner {
       apiKey: config.llm.apiKey
     });
 
-    this.visualChecker = new VisualRegressionChecker();
+    this.visualChecker = new VisualRegressionChecker({
+      baselineDir: 'files/baselines',
+      diffDir: config.reporting.diffDir || 'files/diffs'
+    });
     // Static system prompt — built once after MCP tool discovery, reused for all LLM calls
     this.systemPrompt = null;
     // Token accounting
@@ -442,7 +454,7 @@ class StatelessMCPRunner {
    */
   async initializeMCP() {
     const workspaceDir = path.resolve('files');
-    const screenshotsDir = path.join(workspaceDir, 'screenshots');
+    const screenshotsDir = path.resolve(config.reporting.screenshotsDir);
     const uploadsDir = path.join(workspaceDir, 'uploads');
 
     fs.mkdirSync(path.resolve('files/baselines'), { recursive: true });
@@ -464,7 +476,7 @@ class StatelessMCPRunner {
         '@playwright/mcp@latest',
         '--cdp-endpoint', `http://127.0.0.1:${cdpPort}`,
         '--ignore-https-errors',
-        '--output-dir', 'screenshots',
+        '--output-dir', path.relative(workspaceDir, screenshotsDir),
         '--output-mode', 'stdout',
         '--viewport-size', `${config.browser.viewport.width}x${config.browser.viewport.height}`
       ],
@@ -1210,10 +1222,14 @@ async function main() {
     log.info(`Executing test ${i + 1}/${testFiles.length}: ${testName}`);
     log.info(`${'='.repeat(60)}\n`);
 
+    const testText = fs.readFileSync(testFile, 'utf8');
+    const yamlNameMatch = testText.match(/^name:\s*(.+)$/m);
+    if (yamlNameMatch) {
+      configureVisualAssetPaths(yamlNameMatch[1].trim());
+    }
+
     const runner = new StatelessMCPRunner();
     activeRunner = runner;
-
-    const testText = fs.readFileSync(testFile, 'utf8');
 
     try {
       if (isPerformanceTest(testText)) {
