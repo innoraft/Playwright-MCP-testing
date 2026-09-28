@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { generateText } from 'ai';
 import { createLLM } from './llm-factory.js';
-import llmConfig from './config/llm.config.js';
+import * as settingsRepo from './server/db/repositories/settingsRepo.js';
 import { VisualRegressionChecker } from './visual-regression.js';
 import { CDPService } from './src/cdp/cdp.service.js';
 import { buildStaticSystemPrompt } from './src/prompts/system.prompt.js';
@@ -34,6 +34,7 @@ function getVisualScreenshotFilename(testName, breakpoint) {
   return `${safeName}_${safeBreakpoint}.png`;
 }
 
+const llmConfig = await settingsRepo.getLlmConfig();
 const config = {
   llm: {
     provider: llmConfig.provider,

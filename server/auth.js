@@ -1,76 +1,33 @@
 /**
  * Authentication & User Management Module
  * ──────────────────────────────────────────
- * JSON-file-based user store with bcrypt password hashing and JWT sessions.
- * No database required — users are stored in config/users.json.
+ * Postgres-backed user store (bcrypt password hashing + JWT sessions).
+ * Exported function names/signatures are unchanged from the previous
+ * JSON-file-based implementation, so server/index.js only needed `await` added.
  */
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
+import * as usersRepo from './db/repositories/usersRepo.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USERS_PATH = path.join(__dirname, '..', 'config', 'users.json');
-
-const SALT_ROUNDS = 10;
 const TOKEN_EXPIRY = '7d';
 
-// ── Load / Save ──────────────────────────────────────────
-
-function loadStore() {
-  try {
-    const raw = fs.readFileSync(USERS_PATH, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return { users: [], jwtSecret: '' };
+function getSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET is not set. Add it to your .env file.');
   }
+  return secret;
 }
 
-function saveStore(store) {
-  fs.writeFileSync(USERS_PATH, JSON.stringify(store, null, 2), 'utf-8');
-}
-
-// ── Initialization (seed admin + JWT secret) ─────────────
+// ── Initialization (seed admin) ──────────────────────────
 
 async function initializeAuth() {
-  const store = loadStore();
-
-  // Generate persistent JWT secret if missing
-  if (!store.jwtSecret) {
-    store.jwtSecret = crypto.randomBytes(64).toString('hex');
-  }
-
-  // Seed default admin if no users exist or admin has placeholder hash
-  const admin = store.users.find(u => u.username === 'admin');
-  if (!admin) {
-    const hash = await bcrypt.hash('admin123', SALT_ROUNDS);
-    store.users.push({
-      id: 'admin-001',
-      username: 'admin',
-      email: 'admin@playwright-mcp.local',
-      passwordHash: hash,
-      roles: ['admin', 'authenticated'],
-      active: true,
-      createdAt: new Date().toISOString()
-    });
-    console.log('🔐 Default admin account created (username: admin, password: admin123)');
-  } else if (admin.passwordHash === '$2a$10$placeholder') {
-    admin.passwordHash = await bcrypt.hash('admin123', SALT_ROUNDS);
-    console.log('🔐 Default admin password set (username: admin, password: admin123)');
-  }
-
-  saveStore(store);
-  return store;
+  // Fail fast on boot if the secret is missing rather than on first login attempt.
+  getSecret();
+  await usersRepo.ensureAdminSeeded();
 }
 
 // ── JWT helpers ──────────────────────────────────────────
-
-function getSecret() {
-  return loadStore().jwtSecret;
-}
 
 function signToken(user) {
   const payload = {
@@ -90,163 +47,46 @@ function hasAdminRole(roles) {
   return roles.some((role) => String(role).toLowerCase() === 'admin');
 }
 
-// ── User CRUD ────────────────────────────────────────────
+// ── User CRUD (delegated to usersRepo) ───────────────────
 
-function getAllUsers() {
-  const store = loadStore();
-  return store.users.map(u => ({
-    id: u.id,
-    username: u.username,
-    email: u.email,
-    roles: u.roles,
-    active: u.active,
-    createdAt: u.createdAt
-  }));
+async function getAllUsers() {
+  return usersRepo.getAllUsers();
 }
 
-function getUserById(id) {
-  const store = loadStore();
-  return store.users.find(u => u.id === id) || null;
+async function getUserById(id) {
+  return usersRepo.getUserById(id);
 }
 
-function getUserByUsername(username) {
-  const store = loadStore();
-  return store.users.find(u => u.username === username) || null;
+async function getUserByUsername(username) {
+  return usersRepo.getUserByUsername(username);
 }
 
-async function createUser({ username, email, password, roles = ['authenticated'] }) {
-  const store = loadStore();
-
-  // Check uniqueness
-  if (store.users.some(u => u.username === username)) {
-    throw new Error('Username already exists');
-  }
-  if (email && store.users.some(u => u.email === email)) {
-    throw new Error('Email already exists');
-  }
-
-  const hash = await bcrypt.hash(password, SALT_ROUNDS);
-  const user = {
-    id: `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-    username,
-    email: email || '',
-    passwordHash: hash,
-    roles,
-    active: true,
-    createdAt: new Date().toISOString()
-  };
-
-  store.users.push(user);
-  saveStore(store);
-
-  return {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    roles: user.roles,
-    active: user.active,
-    createdAt: user.createdAt
-  };
+async function createUser(input) {
+  return usersRepo.createUser(input);
 }
 
 async function updateUser(id, updates) {
-  const store = loadStore();
-  const idx = store.users.findIndex(u => u.id === id);
-  if (idx === -1) throw new Error('User not found');
-
-  const user = store.users[idx];
-
-  if (updates.username !== undefined) {
-    if (store.users.some(u => u.username === updates.username && u.id !== id)) {
-      throw new Error('Username already exists');
-    }
-    user.username = updates.username;
-  }
-
-  if (updates.email !== undefined) {
-    if (updates.email && store.users.some(u => u.email === updates.email && u.id !== id)) {
-      throw new Error('Email already exists');
-    }
-    user.email = updates.email;
-  }
-
-  if (updates.roles !== undefined) {
-    user.roles = updates.roles;
-  }
-
-  if (updates.active !== undefined) {
-    user.active = updates.active;
-  }
-
-  if (updates.password) {
-    user.passwordHash = await bcrypt.hash(updates.password, SALT_ROUNDS);
-  }
-
-  store.users[idx] = user;
-  saveStore(store);
-
-  return {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    roles: user.roles,
-    active: user.active,
-    createdAt: user.createdAt
-  };
+  return usersRepo.updateUser(id, updates);
 }
 
 // ── Authentication ───────────────────────────────────────
 
 async function authenticate(username, password) {
-  const store = loadStore();
-  const user = store.users.find(u => u.username === username);
-
-  if (!user) return null;
-  if (!user.active) return null;
-
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) return null;
-
-  return {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    roles: user.roles
-  };
+  return usersRepo.authenticate(username, password);
 }
 
 // ── Forgot Password (admin-assisted) ─────────────────────
 
-function requestPasswordReset(username) {
-  const store = loadStore();
-  const user = store.users.find(u => u.username === username);
-  if (!user) return null;
-  if (!user.active) return null;
-
-  user.resetRequestedAt = new Date().toISOString();
-  saveStore(store);
-
-  return { username: user.username, userId: user.id };
+async function requestPasswordReset(username) {
+  return usersRepo.requestPasswordReset(username);
 }
 
-function getResetRequests() {
-  const store = loadStore();
-  return store.users
-    .filter(u => u.resetRequestedAt)
-    .map(u => ({
-      id: u.id,
-      username: u.username,
-      email: u.email,
-      requestedAt: u.resetRequestedAt
-    }));
+async function getResetRequests() {
+  return usersRepo.getResetRequests();
 }
 
-function clearResetRequest(userId) {
-  const store = loadStore();
-  const user = store.users.find(u => u.id === userId);
-  if (!user) return;
-  delete user.resetRequestedAt;
-  saveStore(store);
+async function clearResetRequest(userId) {
+  return usersRepo.clearResetRequest(userId);
 }
 
 // ── Express Middleware ────────────────────────────────────
@@ -255,7 +95,7 @@ function clearResetRequest(userId) {
  * Extracts and verifies JWT from Authorization header.
  * Attaches req.user = { userId, username, roles } on success.
  */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Authentication required' });
@@ -267,7 +107,7 @@ function requireAuth(req, res, next) {
 
     // Always hydrate from store so role changes (e.g. user promoted to admin)
     // take effect immediately without requiring token re-login.
-    const user = getUserById(decoded.userId);
+    const user = await usersRepo.getUserById(decoded.userId);
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
