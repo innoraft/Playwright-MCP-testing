@@ -845,11 +845,13 @@ async function main() {
     const fallbackFolderName = `${suiteName
       .replace(/[^a-zA-Z0-9_-]/g, "_")
       .toLowerCase()}-${new Date(runStartTime).toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
-    const downloadsDir = path.resolve(
-      MCP_WORKSPACE_DIR,
-      "Downloads",
-      reportFileBaseName || fallbackFolderName
-    );
+    // Keep the folder human-readable (suite name) while still ending in currentRunId so
+    // server/index.js's post-run ownership scan (suffix match) can find and attribute it.
+    const safeSuiteName = suiteName.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+    const runFolderName = PLAYWRIGHT_RUN_ID
+      ? `${safeSuiteName}-${PLAYWRIGHT_RUN_ID}`
+      : reportFileBaseName || fallbackFolderName;
+    const downloadsDir = path.resolve(MCP_WORKSPACE_DIR, "Downloads", runFolderName);
     moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
   }
 }

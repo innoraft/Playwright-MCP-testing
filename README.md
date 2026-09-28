@@ -48,6 +48,7 @@ export PGUSER=postgres
 export PGPASSWORD=postgres
 export PGDATABASE=playwright_mcp
 export PGSSL=false
+export JWT_SECRET="$(openssl rand -hex 64)"
 ```
 
 Create the database once (if not already created):
@@ -59,6 +60,16 @@ createdb -U postgres playwright_mcp
 The PostgreSQL schema must already exist before starting the server. The server
 connects directly to PostgreSQL and does not import legacy files or run migration
 scripts at startup.
+
+### Configure the JWT secret
+
+`JWT_SECRET` is required — the server refuses to start without it. Generate one
+once per environment and keep it stable (rotating it invalidates all existing
+login sessions):
+
+```bash
+export JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(64).toString('hex'))")
+```
 
 ### Starting the Platform
 

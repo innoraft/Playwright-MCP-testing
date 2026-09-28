@@ -84,11 +84,24 @@ async function importTestMetadata() {
       'SELECT owner_user_id FROM file_ownership WHERE category = $1 AND filename = $2',
       ['tests', name]
     );
+    const ownerId = owner.rows[0]?.owner_user_id || DEFAULT_ADMIN_ID;
+
+    // Backfill the missing ownership row too, otherwise non-admins can never see/access this test
+    // even though tests_meta below records them as the owner (list/read/delete authorize against this table).
+    if (!owner.rows[0]) {
+      await pool.query(
+        `INSERT INTO file_ownership (category, filename, owner_user_id)
+         VALUES ('tests', $1, $2)
+         ON CONFLICT (category, filename) DO NOTHING`,
+        [name, ownerId]
+      );
+    }
+
     await pool.query(
       `INSERT INTO tests_meta (name, type, owner_user_id, created_at, modified_at)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (name) DO NOTHING`,
-      [name, detectTestType(content), owner.rows[0]?.owner_user_id || DEFAULT_ADMIN_ID, stat.birthtime, stat.mtime]
+      [name, detectTestType(content), ownerId, stat.birthtime, stat.mtime]
     );
   }
 }

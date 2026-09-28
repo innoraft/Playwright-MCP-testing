@@ -57,6 +57,14 @@ async function getOwnedFilenames(category, userId, isAdmin) {
 }
 
 /**
+ * Get a filename -> ownerId map for an entire category in one query,
+ * to avoid N separate getOwner() calls when listing many files.
+ */
+async function getOwnersByCategory(category) {
+  return ownershipRepo.getOwnersByCategory(category);
+}
+
+/**
  * Check if a user is the owner of a file (or is admin).
  * Unowned files (no record) are treated as admin-only.
  */
@@ -70,5 +78,6 @@ export {
   removeOwner,
   setOwnerBulk,
   getOwnedFilenames,
+  getOwnersByCategory,
   isOwnerOrAdmin
 };

@@ -56,10 +56,19 @@ async function getOwnedFilenames(category, userId, isAdmin) {
   return rows.map((r) => r.filename);
 }
 
+/** One query for all owners in a category, to avoid N separate getOwner() calls when listing. */
+async function getOwnersByCategory(category) {
+  const { rows } = await pool.query(
+    'SELECT filename, owner_user_id FROM file_ownership WHERE category = $1',
+    [category]
+  );
+  return new Map(rows.map((r) => [r.filename, r.owner_user_id]));
+}
+
 async function isOwnerOrAdmin(category, filename, userId, isAdmin) {
   if (isAdmin) return true;
   const owner = await getOwner(category, filename);
   return owner === userId;
 }
 
-export { setOwner, getOwner, removeOwner, setOwnerBulk, getOwnedFilenames, isOwnerOrAdmin };
+export { setOwner, getOwner, removeOwner, setOwnerBulk, getOwnedFilenames, getOwnersByCategory, isOwnerOrAdmin };

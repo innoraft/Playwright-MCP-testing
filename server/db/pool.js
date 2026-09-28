@@ -3,13 +3,28 @@
  * All app code should import `pool` from here; never construct a client directly.
  */
 
+import fs from 'fs';
 import 'dotenv/config';
 import pg from 'pg';
 
 const { Pool } = pg;
 
 // pg reads PGHOST, PGPORT, PGUSER, PGPASSWORD, and PGDATABASE directly.
-const ssl = String(process.env.PGSSL).toLowerCase() === 'true' ? { rejectUnauthorized: false } : false;
+function resolveSslConfig() {
+  if (String(process.env.PGSSL).toLowerCase() !== 'true') return false;
+
+  // Verify the server certificate by default; only skip verification when explicitly
+  // opted into (e.g. local testing with a self-signed cert and no CA available).
+  const allowInsecure = String(process.env.PGSSL_ALLOW_INSECURE).toLowerCase() === 'true';
+  const caPath = process.env.PGSSLROOTCERT;
+
+  return {
+    rejectUnauthorized: !allowInsecure,
+    ca: caPath ? fs.readFileSync(caPath, 'utf8') : undefined,
+  };
+}
+
+const ssl = resolveSslConfig();
 
 const pool = new Pool({
   ssl,

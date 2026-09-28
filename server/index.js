@@ -22,10 +22,10 @@ import {
 } from './auth.js';
 import {
   setOwner,
-  getOwner,
   removeOwner,
   setOwnerBulk,
   getOwnedFilenames,
+  getOwnersByCategory,
   isOwnerOrAdmin
 } from './ownership.js';
 import * as settingsRepo from './db/repositories/settingsRepo.js';
@@ -1075,12 +1075,20 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
       }
       // Attribute only files in directories dedicated to this run. Shared
       // directories cannot be assigned safely with an mtime window when runs overlap.
+      // Match by suffix, not exact name, since runners may prefix the folder with a
+      // human-readable test/suite name (e.g. "filedl-<runId>") ahead of the run id.
       for (const subdir of ['screenshots', 'diffs', 'Downloads', 'downloads']) {
-        const runDir = path.join(FILES_DIR, subdir, currentRunId);
-        if (!fs.existsSync(runDir)) continue;
+        const subdirPath = path.join(FILES_DIR, subdir);
+        if (!fs.existsSync(subdirPath)) continue;
 
+        const runDirName = fs
+          .readdirSync(subdirPath, { withFileTypes: true })
+          .find((entry) => entry.isDirectory() && entry.name.endsWith(currentRunId))?.name;
+        if (!runDirName) continue;
+
+        const runDir = path.join(subdirPath, runDirName);
         for (const file of listFilesRecursively(runDir)) {
-          await setOwner('files', `${subdir}/${currentRunId}/${file}`, currentUserId);
+          await setOwner('files', `${subdir}/${runDirName}/${file}`, currentUserId);
         }
       }
     }
@@ -1370,6 +1378,8 @@ app.get('/api/reports', requireAuth, async (req, res) => {
 
     const isAdmin = reqIsAdmin(req);
     const ownedFiles = new Set(await getOwnedFilenames('reports', req.user.userId, isAdmin));
+    // One query for all report owners, instead of a separate getOwner() call per report below.
+    const ownersByFilename = await getOwnersByCategory('reports');
 
     const reports = await Promise.all(
       fs.readdirSync(REPORTS_DIR)
@@ -1383,7 +1393,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
           reportsMetaRepo
             .upsertReportMeta({
               filename: f,
-              ownerId: await getOwner('reports', f),
+              ownerId: ownersByFilename.get(f) || null,
               result: meta.result,
               totalActions: meta.totalActions,
               passed: meta.passed,
@@ -1553,6 +1563,11 @@ app.get('/api/files/browse', requireAuth, async (req, res) => {
     const items = [];
     const isAdmin = reqIsAdmin(req);
 
+    // Every file in this folder listing shares the same ownership category (baselines vs.
+    // generic files), so one bulk query up front replaces a per-file query in the loop below.
+    const isBaselineFolder = folder === 'baselines' || folder?.startsWith('baselines/');
+    const ownersByFilename = isAdmin ? null : await getOwnersByCategory(isBaselineFolder ? 'baselines' : 'files');
+
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue;
 
@@ -1573,14 +1588,10 @@ app.get('/api/files/browse', requireAuth, async (req, res) => {
       } else {
         // Check ownership: use 'baselines' category for baselines folder,
         // 'files' category (with relative path) for everything else
-        const isBaseline = (folder === 'baselines' || folder?.startsWith('baselines/'));
         let hasAccess = isAdmin;
         if (!hasAccess) {
-          if (isBaseline) {
-            hasAccess = await isOwnerOrAdmin('baselines', entry.name, req.user.userId, false);
-          } else {
-            hasAccess = await isOwnerOrAdmin('files', relPath, req.user.userId, false);
-          }
+          const ownerKey = isBaselineFolder ? entry.name : relPath;
+          hasAccess = ownersByFilename.get(ownerKey) === req.user.userId;
         }
         if (!hasAccess) continue;
 
