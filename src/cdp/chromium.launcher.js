@@ -22,6 +22,7 @@ export class ChromiumLauncher {
     this.cdpPort = null;
     this.userDataDir = null;
     this.chromiumTempDirsBeforeRun = new Set();
+    this.exitCleanupHandler = null;
   }
 
   /**
@@ -33,6 +34,8 @@ export class ChromiumLauncher {
   async launch(chromiumPath) {
     await this.cleanupStaleChromiumTempDirs();
     this.chromiumTempDirsBeforeRun = new Set(await this.listChromiumTempDirs());
+    this.exitCleanupHandler = () => this.cleanupOnProcessExit();
+    process.once('exit', this.exitCleanupHandler);
     const port = await findFreePort();
     this.cdpPort = port;
     this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playwright-mcp-chromium-'));
@@ -192,5 +195,45 @@ export class ChromiumLauncher {
     } catch (error) {
       this.log.warn(`Failed to remove Chromium temp profiles created during the run: ${error.message}`);
     }
+
+    if (this.exitCleanupHandler) {
+      process.removeListener('exit', this.exitCleanupHandler);
+      this.exitCleanupHandler = null;
+    }
+  }
+
+  cleanupOnProcessExit() {
+    const browserProcess = this.browserProcess;
+    const userDataDir = this.userDataDir;
+
+    if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
+      try {
+        if (process.platform === 'win32') {
+          browserProcess.kill('SIGKILL');
+        } else {
+          process.kill(-browserProcess.pid, 'SIGKILL');
+        }
+      } catch {}
+    }
+
+    if (userDataDir) {
+      try {
+        fs.rmSync(userDataDir, { recursive: true, force: true });
+      } catch {}
+    }
+
+    try {
+      const entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (!entry.name.startsWith('org.chromium.Chromium.')) continue;
+
+        const tempDir = path.join(os.tmpdir(), entry.name);
+        if (this.chromiumTempDirsBeforeRun.has(tempDir)) continue;
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {}
+      }
+    } catch {}
   }
 }
