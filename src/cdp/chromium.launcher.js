@@ -1,4 +1,7 @@
 import { spawn } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { findFreePort } from "./port.util.js";
 
 /**
@@ -17,6 +20,8 @@ export class ChromiumLauncher {
 
     this.browserProcess = null;
     this.cdpPort = null;
+    this.userDataDir = null;
+    this.chromiumTempDirsBeforeRun = new Set();
   }
 
   /**
@@ -26,11 +31,15 @@ export class ChromiumLauncher {
    * @returns {Promise<number>} The allocated CDP port.
    */
   async launch(chromiumPath) {
+    await this.cleanupStaleChromiumTempDirs();
+    this.chromiumTempDirsBeforeRun = new Set(await this.listChromiumTempDirs());
     const port = await findFreePort();
     this.cdpPort = port;
+    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playwright-mcp-chromium-'));
 
     const args = [
       `--remote-debugging-port=${port}`,
+      `--user-data-dir=${this.userDataDir}`,
       '--headless=new',
       '--disable-gpu',
       '--no-sandbox',
@@ -50,11 +59,47 @@ export class ChromiumLauncher {
 
     this.browserProcess = spawn(chromiumPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== 'win32',
     });
 
-    await this.waitForCDPReady(port);
+    try {
+      await this.waitForCDPReady(port);
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
 
     return port;
+  }
+
+  async cleanupStaleChromiumTempDirs() {
+    const maxAgeMs = Number(process.env.PLAYWRIGHT_CHROMIUM_TMP_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+
+    try {
+      for (const profilePath of await this.listChromiumTempDirs()) {
+        const stats = await fs.promises.stat(profilePath);
+        if (stats.mtimeMs >= cutoff) continue;
+
+        await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
+        removed++;
+      }
+    } catch (error) {
+      this.log.warn(`Failed to clean stale Chromium temp profiles: ${error.message}`);
+    }
+
+    if (removed > 0) {
+      this.log.info(`Removed ${removed} stale Chromium temp profile(s)`);
+    }
+  }
+
+  async listChromiumTempDirs() {
+    const prefixes = ['org.chromium.Chromium.', '.org.chromium.Chromium.'];
+    const entries = await fs.promises.readdir(os.tmpdir(), { withFileTypes: true });
+    return entries
+      .filter(entry => entry.isDirectory() && prefixes.some(prefix => entry.name.startsWith(prefix)))
+      .map(entry => path.join(os.tmpdir(), entry.name));
   }
 
   /**
@@ -90,18 +135,62 @@ export class ChromiumLauncher {
    * @returns {Promise<void>}
    */
   async stop() {
-    if (!this.browserProcess) return;
+    const browserProcess = this.browserProcess;
+    const userDataDir = this.userDataDir;
+    this.browserProcess = null;
+    this.userDataDir = null;
 
     try {
-      this.browserProcess.kill("SIGTERM");
+      if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
+        const signalProcessGroup = (signal) => {
+          try {
+            if (process.platform === 'win32') {
+              browserProcess.kill(signal);
+            } else {
+              process.kill(-browserProcess.pid, signal);
+            }
+          } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+          }
+        };
 
-      await new Promise((r) => setTimeout(r, 2000));
+        signalProcessGroup("SIGTERM");
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 2000);
+          browserProcess.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
 
-      if (!this.browserProcess.killed) {
-        this.browserProcess.kill("SIGKILL");
+        if (browserProcess.exitCode === null) {
+          signalProcessGroup("SIGKILL");
+          await new Promise((resolve) => browserProcess.once('exit', resolve));
+        }
       }
-    } catch {}
+    } catch (error) {
+      this.log.warn(`Failed to stop Chromium cleanly: ${error.message}`);
+    }
 
-    this.browserProcess = null;
+    if (userDataDir) {
+      try {
+        await fs.promises.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch (error) {
+        this.log.warn(`Failed to remove Chromium profile ${userDataDir}: ${error.message}`);
+      }
+    }
+
+    try {
+      const currentTempDirs = await this.listChromiumTempDirs();
+      const newTempDirs = currentTempDirs.filter(tempDir => !this.chromiumTempDirsBeforeRun.has(tempDir));
+      await Promise.all(newTempDirs.map(tempDir =>
+        fs.promises.rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+      ));
+      if (newTempDirs.length > 0) {
+        this.log.info(`Removed ${newTempDirs.length} Chromium temp profile(s) created during the run`);
+      }
+    } catch (error) {
+      this.log.warn(`Failed to remove Chromium temp profiles created during the run: ${error.message}`);
+    }
   }
 }
