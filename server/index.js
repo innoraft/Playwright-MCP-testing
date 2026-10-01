@@ -967,6 +967,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   const currentUserId = userId;
   const runnerEnv = { ...process.env };
   runnerEnv.PLAYWRIGHT_RUN_ID = currentRunId;
+  runnerEnv.PLAYWRIGHT_RUN_USER = req.user.username || '';
 
   if (runner === 'tool-call') {
     runnerEnv.MCP_WORKSPACE_DIR = FILES_DIR;
@@ -1213,8 +1214,10 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
     // Send SIGTERM first to trigger cleanup handlers in the child
     state.process.kill('SIGTERM');
 
-    // Force-kill the entire process group after a short grace period
-    // This ensures Chromium, MCP server, and all subprocesses are terminated
+    // Force-kill the entire process group after a grace period long enough for the
+    // runner's own SIGTERM handler to gracefully stop Chromium (its own detached
+    // process group) first — otherwise the runner dies before Chromium does and
+    // the orphaned Chromium group is never reached by this group-wide SIGKILL.
     setTimeout(() => {
       try {
         // Kill the entire process group (negative PID)
@@ -1239,7 +1242,7 @@ app.post('/api/runner/stop', requireAuth, (req, res) => {
         reportFile: null,
         exitCode: -1
       });
-    }, 1500);
+    }, 4000);
 
     res.json({ success: true, message: 'Test run stopped' });
   } catch (err) {

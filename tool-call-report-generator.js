@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
  * @param {Array<object>} options.results - Array of step results
  * @param {number} options.totalDurationMs - Total run duration in ms
  * @param {string} [options.outputDir] - Directory to write the report to (default: "reports")
+ * @param {string} [options.runBy] - Username of the user who triggered the run
  * @returns {string} Absolute path to the generated report file
  */
 export function generateHtmlReport({
@@ -20,6 +21,7 @@ export function generateHtmlReport({
   results,
   totalDurationMs,
   outputDir = "test-reports",
+  runBy,
 }) {
   const now = new Date();
   const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -108,6 +110,7 @@ export function generateHtmlReport({
         <div class="meta-item">🔗 URL: <span>${escapeHtml(baseUrl || "N/A")}</span></div>
         <div class="meta-item">🕐 Run: <span>${now.toLocaleString()}</span></div>
         <div class="meta-item">⏱ Duration: <span>${durationStr}</span></div>
+        <div class="meta-item">👤 Run by: <span>${escapeHtml(runBy || "N/A")}</span></div>
       </div>
     </div>
 

@@ -67,7 +67,7 @@
     "jsonwebtoken": "^9.0.3",
     "lighthouse": "^12.8.2",
     "multer": "^2.1.1",
-    "nodemailer": "^8.0.4",
+    "nodemailer": "^10.0.12",
     "openai": "^6.39.0",
     "pg": "^8.23.0",
     "pixelmatch": "^7.1.0",

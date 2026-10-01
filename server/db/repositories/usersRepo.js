@@ -9,6 +9,11 @@ import { pool } from '../pool.js';
 
 const SALT_ROUNDS = 10;
 
+function normalizeEmail(email) {
+  const normalized = typeof email === 'string' ? email.trim() : email;
+  return normalized || null;
+}
+
 function toPublicUser(row) {
   if (!row) return null;
   return {
@@ -47,7 +52,8 @@ async function usernameOrEmailTaken(username, email, excludeId) {
 }
 
 async function createUser({ username, email, password, roles = ['authenticated'] }) {
-  const existing = await usernameOrEmailTaken(username, email, null);
+  const normalizedEmail = normalizeEmail(email);
+  const existing = await usernameOrEmailTaken(username, normalizedEmail, null);
   if (existing.length > 0) {
     const { rows } = await pool.query('SELECT username, email FROM users WHERE id = $1', [existing[0].id]);
     if (rows[0]?.username === username) throw new Error('Username already exists');
@@ -61,7 +67,7 @@ async function createUser({ username, email, password, roles = ['authenticated']
     `INSERT INTO users (id, username, email, password_hash, roles, active)
      VALUES ($1, $2, $3, $4, $5, true)
      RETURNING id, username, email, roles, active, created_at`,
-    [id, username, email || '', hash, roles]
+    [id, username, normalizedEmail, hash, roles]
   );
 
   return toPublicUser(rows[0]);
@@ -72,10 +78,10 @@ async function updateUser(id, updates) {
   if (!user) throw new Error('User not found');
 
   const nextUsername = updates.username !== undefined ? updates.username : user.username;
-  const nextEmail = updates.email !== undefined ? updates.email : user.email;
+  const nextEmail = normalizeEmail(updates.email !== undefined ? updates.email : user.email);
 
   if (updates.username !== undefined || updates.email !== undefined) {
-    const conflicts = await usernameOrEmailTaken(nextUsername, nextEmail || null, id);
+    const conflicts = await usernameOrEmailTaken(nextUsername, nextEmail, id);
     if (conflicts.length > 0) {
       if (updates.username !== undefined) throw new Error('Username already exists');
       throw new Error('Email already exists');
@@ -93,7 +99,7 @@ async function updateUser(id, updates) {
      SET username = $1, email = $2, roles = $3, active = $4, password_hash = $5
      WHERE id = $6
      RETURNING id, username, email, roles, active, created_at`,
-    [nextUsername, nextEmail || '', nextRoles, nextActive, nextPasswordHash, id]
+    [nextUsername, nextEmail, nextRoles, nextActive, nextPasswordHash, id]
   );
 
   return toPublicUser(rows[0]);

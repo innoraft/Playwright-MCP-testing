@@ -1,5 +1,22 @@
 import { spawn } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { findFreePort } from "./port.util.js";
+
+const OWNED_ROOT_PREFIX = 'playwright-mcp-chromium-run-';
+const OWNER_PID_FILE = '.owner-pid';
+
+/** Checks whether `pid` still refers to a live process (POSIX `kill -0` semantics). */
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM'; // exists but owned by another user — treat as alive
+  }
+}
 
 /**
  * Manages Chromium process lifecycle for CDP-based automation.
@@ -17,6 +34,9 @@ export class ChromiumLauncher {
 
     this.browserProcess = null;
     this.cdpPort = null;
+    this.userDataDir = null;
+    this.ownedTempRoot = null;
+    this.exitCleanupHandler = null;
   }
 
   /**
@@ -26,11 +46,23 @@ export class ChromiumLauncher {
    * @returns {Promise<number>} The allocated CDP port.
    */
   async launch(chromiumPath) {
+    await this.cleanupStaleOwnedTempRoots();
+    this.exitCleanupHandler = () => this.cleanupOnProcessExit();
+    process.once('exit', this.exitCleanupHandler);
     const port = await findFreePort();
     this.cdpPort = port;
 
+    // Every launch gets its own private temp root (with an owner-pid marker) so
+    // cleanup only ever removes dirs this instance created — never another
+    // concurrently running test's Chromium temp files.
+    this.ownedTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), OWNED_ROOT_PREFIX));
+    fs.writeFileSync(path.join(this.ownedTempRoot, OWNER_PID_FILE), String(process.pid));
+    this.userDataDir = path.join(this.ownedTempRoot, 'profile');
+    fs.mkdirSync(this.userDataDir, { recursive: true });
+
     const args = [
       `--remote-debugging-port=${port}`,
+      `--user-data-dir=${this.userDataDir}`,
       '--headless=new',
       '--disable-gpu',
       '--no-sandbox',
@@ -50,11 +82,68 @@ export class ChromiumLauncher {
 
     this.browserProcess = spawn(chromiumPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== 'win32',
+      // Relocates Chromium's --disable-dev-shm-usage shared-memory temp dirs
+      // under our owned root instead of the shared global tmp dir.
+      env: { ...process.env, TMPDIR: this.ownedTempRoot, TMP: this.ownedTempRoot, TEMP: this.ownedTempRoot },
     });
 
-    await this.waitForCDPReady(port);
+    try {
+      await this.waitForCDPReady(port);
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
 
     return port;
+  }
+
+  /**
+   * Removes owned temp roots left behind by a previous ungraceful kill. A root
+   * is only ever removed once its recorded owner PID is no longer alive
+   * (never based on age alone), so an active, still-running test is never touched.
+   */
+  async cleanupStaleOwnedTempRoots() {
+    const envMaxAge = Number(process.env.PLAYWRIGHT_CHROMIUM_TMP_MAX_AGE_MS);
+    const maxAgeMs = Number.isFinite(envMaxAge) && envMaxAge >= 0 ? envMaxAge : 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+
+    let rootPaths = [];
+    try {
+      rootPaths = await this.listOwnedTempRoots();
+    } catch (error) {
+      this.log.warn(`Failed to list Chromium temp roots: ${error.message}`);
+    }
+
+    // Handle each root independently so one failure doesn't abort the rest.
+    for (const rootPath of rootPaths) {
+      try {
+        const ownerPid = Number(
+          await fs.promises.readFile(path.join(rootPath, OWNER_PID_FILE), 'utf8').catch(() => '')
+        );
+        if (isPidAlive(ownerPid)) continue; // still owned by a running test
+
+        const stats = await fs.promises.stat(rootPath);
+        if (stats.mtimeMs >= cutoff) continue;
+
+        await fs.promises.rm(rootPath, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
+        removed++;
+      } catch (error) {
+        this.log.warn(`Failed to clean stale Chromium temp root ${rootPath}: ${error.message}`);
+      }
+    }
+
+    if (removed > 0) {
+      this.log.info(`Removed ${removed} stale Chromium temp root(s)`);
+    }
+  }
+
+  async listOwnedTempRoots() {
+    const entries = await fs.promises.readdir(os.tmpdir(), { withFileTypes: true });
+    return entries
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(OWNED_ROOT_PREFIX))
+      .map(entry => path.join(os.tmpdir(), entry.name));
   }
 
   /**
@@ -90,18 +179,76 @@ export class ChromiumLauncher {
    * @returns {Promise<void>}
    */
   async stop() {
-    if (!this.browserProcess) return;
+    const browserProcess = this.browserProcess;
+    const ownedTempRoot = this.ownedTempRoot;
+    this.browserProcess = null;
+    this.userDataDir = null;
+    this.ownedTempRoot = null;
 
     try {
-      this.browserProcess.kill("SIGTERM");
+      if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
+        const signalProcessGroup = (signal) => {
+          try {
+            if (process.platform === 'win32') {
+              browserProcess.kill(signal);
+            } else {
+              process.kill(-browserProcess.pid, signal);
+            }
+          } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+          }
+        };
 
-      await new Promise((r) => setTimeout(r, 2000));
+        signalProcessGroup("SIGTERM");
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 2000);
+          browserProcess.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
 
-      if (!this.browserProcess.killed) {
-        this.browserProcess.kill("SIGKILL");
+        if (browserProcess.exitCode === null) {
+          signalProcessGroup("SIGKILL");
+          await new Promise((resolve) => browserProcess.once('exit', resolve));
+        }
       }
-    } catch {}
+    } catch (error) {
+      this.log.warn(`Failed to stop Chromium cleanly: ${error.message}`);
+    }
 
-    this.browserProcess = null;
+    if (ownedTempRoot) {
+      try {
+        await fs.promises.rm(ownedTempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch (error) {
+        this.log.warn(`Failed to remove Chromium temp root ${ownedTempRoot}: ${error.message}`);
+      }
+    }
+
+    if (this.exitCleanupHandler) {
+      process.removeListener('exit', this.exitCleanupHandler);
+      this.exitCleanupHandler = null;
+    }
+  }
+
+  cleanupOnProcessExit() {
+    const browserProcess = this.browserProcess;
+    const ownedTempRoot = this.ownedTempRoot;
+
+    if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
+      try {
+        if (process.platform === 'win32') {
+          browserProcess.kill('SIGKILL');
+        } else {
+          process.kill(-browserProcess.pid, 'SIGKILL');
+        }
+      } catch {}
+    }
+
+    if (ownedTempRoot) {
+      try {
+        fs.rmSync(ownedTempRoot, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }

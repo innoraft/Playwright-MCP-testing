@@ -447,6 +447,7 @@ export class PerformanceReportGenerator {
         <span>📋 <strong>${this.escapeHtml(report.testName || 'Audit')}</strong></span>
         <span>🔗 ${this.escapeHtml(report.targetUrl || '—')}</span>
         <span>📅 ${new Date(report.generatedAt || Date.now()).toLocaleString()}</span>
+        ${report.runBy ? `<span>👤 Run by: ${this.escapeHtml(report.runBy)}</span>` : ''}
       </div>
       <div class="cats-badge">📊 ${this.escapeHtml(catLabels)}</div>
     </div>
