@@ -21,6 +21,7 @@ const __rootDir = path.dirname(fileURLToPath(import.meta.url));
 const MCP_COMMAND = process.env.MCP_COMMAND ?? "npx";
 const MCP_WORKSPACE_DIR = process.env.MCP_WORKSPACE_DIR ?? process.cwd();
 const PLAYWRIGHT_RUN_ID = process.env.PLAYWRIGHT_RUN_ID?.trim() || "";
+const PLAYWRIGHT_RUN_USER = process.env.PLAYWRIGHT_RUN_USER?.trim() || "";
 const MCP_CDP_ENDPOINT = process.env.MCP_CDP_ENDPOINT;
 const MCP_OUTPUT_DIR = process.env.MCP_OUTPUT_DIR ?? "files/screenshots";
 const VIEWPORT_WIDTH = process.env.PLAYWRIGHT_VIEWPORT_WIDTH ?? "1440";
@@ -588,6 +589,7 @@ async function main() {
         baseUrl,
         results: allResults,
         totalDurationMs: Date.now() - runStartTime,
+        runBy: PLAYWRIGHT_RUN_USER,
       });
       reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
       console.log(`📄 Partial report saved: ${reportPath}`);
@@ -830,6 +832,7 @@ async function main() {
       baseUrl,
       results: allResults,
       totalDurationMs,
+      runBy: PLAYWRIGHT_RUN_USER,
     });
     reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
     console.log(`📄 HTML Report saved: ${reportPath}\n`);

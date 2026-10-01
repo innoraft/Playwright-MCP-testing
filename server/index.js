@@ -967,6 +967,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   const currentUserId = userId;
   const runnerEnv = { ...process.env };
   runnerEnv.PLAYWRIGHT_RUN_ID = currentRunId;
+  runnerEnv.PLAYWRIGHT_RUN_USER = req.user.username || '';
 
   if (runner === 'tool-call') {
     runnerEnv.MCP_WORKSPACE_DIR = FILES_DIR;

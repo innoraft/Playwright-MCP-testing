@@ -403,6 +403,7 @@ export class TestReportGenerator {
       <div class="header">
         <h1>🤖 Autonomous LLM-MCP Test Report</h1>
         <p>Generated on ${new Date(testReport.startTime).toLocaleString()}</p>
+        ${testReport.runBy ? `<p>👤 Run by: ${testReport.runBy}</p>` : ''}
       </div>`;
   }
 

@@ -20,6 +20,7 @@ import { buildPerfSuggestionsSystemPrompt, buildPerfSuggestionsUserMessage } fro
 import { findChromiumPath } from './src/utils/browser-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const runBy = process.env.PLAYWRIGHT_RUN_USER?.trim() || '';
 
 const llmConfig = await settingsRepo.getLlmConfig();
 const config = {
@@ -201,6 +202,7 @@ class LighthouseRunner {
         mobileMetrics,
         desktopMetrics,
         aiSuggestions,
+        runBy,
       });
 
       reports.push(htmlReport);

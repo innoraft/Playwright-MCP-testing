@@ -31,6 +31,7 @@ import { buildPerfSuggestionsSystemPrompt, buildPerfSuggestionsUserMessage } fro
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const runId = process.env.PLAYWRIGHT_RUN_ID?.trim() || '';
+const runBy = process.env.PLAYWRIGHT_RUN_USER?.trim() || '';
 
 function configureVisualAssetPaths(logicalName) {
   if (!runId) return;
@@ -438,6 +439,7 @@ class StatelessMCPRunner {
         mobileMetrics,
         desktopMetrics,
         aiSuggestions,
+        runBy,
       });
 
       log.success(`📊 Report saved: ${htmlReport}`);
@@ -919,7 +921,7 @@ class StatelessMCPRunner {
       testName: logicalName, testText: testText,
       startTime: new Date(), endTime: null,
       actions: [], passedActions: 0, failedActions: 0,
-      totalActions: 0, testResult: 'running'
+      totalActions: 0, testResult: 'running', runBy
     };
 
     const testSteps = testText.split('\n').filter(l => l.trim().startsWith('-'));

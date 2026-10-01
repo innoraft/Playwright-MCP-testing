@@ -25,6 +25,7 @@ import { findChromiumPath } from './src/utils/browser-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const runId = process.env.PLAYWRIGHT_RUN_ID?.trim() || '';
+const runBy = process.env.PLAYWRIGHT_RUN_USER?.trim() || '';
 const runScreenshotsDir = runId ? `files/screenshots/${runId}` : 'files/screenshots';
 const runDiffsDir = runId ? `files/diffs/${runId}` : 'files/diffs';
 
@@ -436,7 +437,8 @@ class VisualMCPRunner {
       passedActions: 0,
       failedActions: 0,
       totalActions: 0,
-      testResult: 'running'
+      testResult: 'running',
+      runBy
     };
 
     const testSteps = testText.split('\n').filter(line => line.trim().startsWith('-'));

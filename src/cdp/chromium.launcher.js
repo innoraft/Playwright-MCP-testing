@@ -76,20 +76,30 @@ export class ChromiumLauncher {
   }
 
   async cleanupStaleChromiumTempDirs() {
-    const maxAgeMs = Number(process.env.PLAYWRIGHT_CHROMIUM_TMP_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
+    const envMaxAge = Number(process.env.PLAYWRIGHT_CHROMIUM_TMP_MAX_AGE_MS);
+    const maxAgeMs = Number.isFinite(envMaxAge) && envMaxAge >= 0 ? envMaxAge : 24 * 60 * 60 * 1000;
     const cutoff = Date.now() - maxAgeMs;
     let removed = 0;
 
+    let profilePaths = [];
     try {
-      for (const profilePath of await this.listChromiumTempDirs()) {
+      profilePaths = await this.listChromiumTempDirs();
+    } catch (error) {
+      this.log.warn(`Failed to list Chromium temp profiles: ${error.message}`);
+    }
+
+    // Handle each dir independently so one failure (e.g. ENOENT from a dir
+    // that vanished mid-scan) doesn't abort the sweep of the remaining dirs.
+    for (const profilePath of profilePaths) {
+      try {
         const stats = await fs.promises.stat(profilePath);
         if (stats.mtimeMs >= cutoff) continue;
 
         await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
         removed++;
+      } catch (error) {
+        this.log.warn(`Failed to clean stale Chromium temp profile ${profilePath}: ${error.message}`);
       }
-    } catch (error) {
-      this.log.warn(`Failed to clean stale Chromium temp profiles: ${error.message}`);
     }
 
     if (removed > 0) {

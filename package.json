@@ -65,7 +65,7 @@
     "express": "^5.2.1",
     "js-yaml": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "lighthouse": "^13.5.0",
+    "lighthouse": "^12.8.2",
     "multer": "^2.1.1",
     "nodemailer": "^10.0.12",
     "openai": "^6.39.0",
