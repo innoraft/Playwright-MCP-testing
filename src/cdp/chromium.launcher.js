@@ -4,6 +4,20 @@ import os from "os";
 import path from "path";
 import { findFreePort } from "./port.util.js";
 
+const OWNED_ROOT_PREFIX = 'playwright-mcp-chromium-run-';
+const OWNER_PID_FILE = '.owner-pid';
+
+/** Checks whether `pid` still refers to a live process (POSIX `kill -0` semantics). */
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM'; // exists but owned by another user — treat as alive
+  }
+}
+
 /**
  * Manages Chromium process lifecycle for CDP-based automation.
  */
@@ -21,7 +35,7 @@ export class ChromiumLauncher {
     this.browserProcess = null;
     this.cdpPort = null;
     this.userDataDir = null;
-    this.chromiumTempDirsBeforeRun = new Set();
+    this.ownedTempRoot = null;
     this.exitCleanupHandler = null;
   }
 
@@ -32,13 +46,19 @@ export class ChromiumLauncher {
    * @returns {Promise<number>} The allocated CDP port.
    */
   async launch(chromiumPath) {
-    await this.cleanupStaleChromiumTempDirs();
-    this.chromiumTempDirsBeforeRun = new Set(await this.listChromiumTempDirs());
+    await this.cleanupStaleOwnedTempRoots();
     this.exitCleanupHandler = () => this.cleanupOnProcessExit();
     process.once('exit', this.exitCleanupHandler);
     const port = await findFreePort();
     this.cdpPort = port;
-    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playwright-mcp-chromium-'));
+
+    // Every launch gets its own private temp root (with an owner-pid marker) so
+    // cleanup only ever removes dirs this instance created — never another
+    // concurrently running test's Chromium temp files.
+    this.ownedTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), OWNED_ROOT_PREFIX));
+    fs.writeFileSync(path.join(this.ownedTempRoot, OWNER_PID_FILE), String(process.pid));
+    this.userDataDir = path.join(this.ownedTempRoot, 'profile');
+    fs.mkdirSync(this.userDataDir, { recursive: true });
 
     const args = [
       `--remote-debugging-port=${port}`,
@@ -63,6 +83,9 @@ export class ChromiumLauncher {
     this.browserProcess = spawn(chromiumPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== 'win32',
+      // Relocates Chromium's --disable-dev-shm-usage shared-memory temp dirs
+      // under our owned root instead of the shared global tmp dir.
+      env: { ...process.env, TMPDIR: this.ownedTempRoot, TMP: this.ownedTempRoot, TEMP: this.ownedTempRoot },
     });
 
     try {
@@ -75,43 +98,51 @@ export class ChromiumLauncher {
     return port;
   }
 
-  async cleanupStaleChromiumTempDirs() {
+  /**
+   * Removes owned temp roots left behind by a previous ungraceful kill. A root
+   * is only ever removed once its recorded owner PID is no longer alive
+   * (never based on age alone), so an active, still-running test is never touched.
+   */
+  async cleanupStaleOwnedTempRoots() {
     const envMaxAge = Number(process.env.PLAYWRIGHT_CHROMIUM_TMP_MAX_AGE_MS);
     const maxAgeMs = Number.isFinite(envMaxAge) && envMaxAge >= 0 ? envMaxAge : 24 * 60 * 60 * 1000;
     const cutoff = Date.now() - maxAgeMs;
     let removed = 0;
 
-    let profilePaths = [];
+    let rootPaths = [];
     try {
-      profilePaths = await this.listChromiumTempDirs();
+      rootPaths = await this.listOwnedTempRoots();
     } catch (error) {
-      this.log.warn(`Failed to list Chromium temp profiles: ${error.message}`);
+      this.log.warn(`Failed to list Chromium temp roots: ${error.message}`);
     }
 
-    // Handle each dir independently so one failure (e.g. ENOENT from a dir
-    // that vanished mid-scan) doesn't abort the sweep of the remaining dirs.
-    for (const profilePath of profilePaths) {
+    // Handle each root independently so one failure doesn't abort the rest.
+    for (const rootPath of rootPaths) {
       try {
-        const stats = await fs.promises.stat(profilePath);
+        const ownerPid = Number(
+          await fs.promises.readFile(path.join(rootPath, OWNER_PID_FILE), 'utf8').catch(() => '')
+        );
+        if (isPidAlive(ownerPid)) continue; // still owned by a running test
+
+        const stats = await fs.promises.stat(rootPath);
         if (stats.mtimeMs >= cutoff) continue;
 
-        await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
+        await fs.promises.rm(rootPath, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
         removed++;
       } catch (error) {
-        this.log.warn(`Failed to clean stale Chromium temp profile ${profilePath}: ${error.message}`);
+        this.log.warn(`Failed to clean stale Chromium temp root ${rootPath}: ${error.message}`);
       }
     }
 
     if (removed > 0) {
-      this.log.info(`Removed ${removed} stale Chromium temp profile(s)`);
+      this.log.info(`Removed ${removed} stale Chromium temp root(s)`);
     }
   }
 
-  async listChromiumTempDirs() {
-    const prefixes = ['org.chromium.Chromium.', '.org.chromium.Chromium.'];
+  async listOwnedTempRoots() {
     const entries = await fs.promises.readdir(os.tmpdir(), { withFileTypes: true });
     return entries
-      .filter(entry => entry.isDirectory() && prefixes.some(prefix => entry.name.startsWith(prefix)))
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(OWNED_ROOT_PREFIX))
       .map(entry => path.join(os.tmpdir(), entry.name));
   }
 
@@ -149,9 +180,10 @@ export class ChromiumLauncher {
    */
   async stop() {
     const browserProcess = this.browserProcess;
-    const userDataDir = this.userDataDir;
+    const ownedTempRoot = this.ownedTempRoot;
     this.browserProcess = null;
     this.userDataDir = null;
+    this.ownedTempRoot = null;
 
     try {
       if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
@@ -185,25 +217,12 @@ export class ChromiumLauncher {
       this.log.warn(`Failed to stop Chromium cleanly: ${error.message}`);
     }
 
-    if (userDataDir) {
+    if (ownedTempRoot) {
       try {
-        await fs.promises.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+        await fs.promises.rm(ownedTempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       } catch (error) {
-        this.log.warn(`Failed to remove Chromium profile ${userDataDir}: ${error.message}`);
+        this.log.warn(`Failed to remove Chromium temp root ${ownedTempRoot}: ${error.message}`);
       }
-    }
-
-    try {
-      const currentTempDirs = await this.listChromiumTempDirs();
-      const newTempDirs = currentTempDirs.filter(tempDir => !this.chromiumTempDirsBeforeRun.has(tempDir));
-      await Promise.all(newTempDirs.map(tempDir =>
-        fs.promises.rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-      ));
-      if (newTempDirs.length > 0) {
-        this.log.info(`Removed ${newTempDirs.length} Chromium temp profile(s) created during the run`);
-      }
-    } catch (error) {
-      this.log.warn(`Failed to remove Chromium temp profiles created during the run: ${error.message}`);
     }
 
     if (this.exitCleanupHandler) {
@@ -214,7 +233,7 @@ export class ChromiumLauncher {
 
   cleanupOnProcessExit() {
     const browserProcess = this.browserProcess;
-    const userDataDir = this.userDataDir;
+    const ownedTempRoot = this.ownedTempRoot;
 
     if (browserProcess && browserProcess.exitCode === null && !browserProcess.killed) {
       try {
@@ -226,24 +245,10 @@ export class ChromiumLauncher {
       } catch {}
     }
 
-    if (userDataDir) {
+    if (ownedTempRoot) {
       try {
-        fs.rmSync(userDataDir, { recursive: true, force: true });
+        fs.rmSync(ownedTempRoot, { recursive: true, force: true });
       } catch {}
     }
-
-    try {
-      const entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (!entry.name.startsWith('org.chromium.Chromium.')) continue;
-
-        const tempDir = path.join(os.tmpdir(), entry.name);
-        if (this.chromiumTempDirsBeforeRun.has(tempDir)) continue;
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {}
-      }
-    } catch {}
   }
 }
