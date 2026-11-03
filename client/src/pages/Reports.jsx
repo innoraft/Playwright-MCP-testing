@@ -165,8 +165,6 @@ export default function Reports({ initialReport }) {
 
   // ── Report stats for summary ──────────────────────────
   const totalReports = reports.length;
-  const passedReports = reports.filter(r => normalizeResult(r.result) === 'pass').length;
-  const failedReports = reports.filter(r => normalizeResult(r.result) === 'fail').length;
 
   return (
     <div className="page-container page-container-wide">
@@ -194,14 +192,6 @@ export default function Reports({ initialReport }) {
           <div className="reports-summary-stat">
             <span className="reports-summary-value">{totalReports}</span>
             <span className="reports-summary-label">Total</span>
-          </div>
-          <div className="reports-summary-stat">
-            <span className="reports-summary-value reports-summary-pass">{passedReports}</span>
-            <span className="reports-summary-label">Passed</span>
-          </div>
-          <div className="reports-summary-stat">
-            <span className="reports-summary-value reports-summary-fail">{failedReports}</span>
-            <span className="reports-summary-label">Failed</span>
           </div>
         </div>
       )}

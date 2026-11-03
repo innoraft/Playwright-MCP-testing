@@ -1,35 +1,43 @@
-/* Toast */
-.toast-container {
+/* Toast (prefixed to avoid colliding with Bootstrap's .toast, which hides
+   elements lacking its JS-managed .show class) */
+.runner-toast-container {
   position: fixed;
   top: 24px;
   right: 24px;
-  z-index: 1100;
+  z-index: 9999;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: min(420px, calc(100vw - 48px));
+  pointer-events: none;
 }
 
-.toast {
-  min-width: 280px;
+.runner-toast {
+  width: 100%;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 14px 20px;
   border-radius: var(--radius-md);
   font-size: 14px;
+  line-height: 1.4;
   font-weight: 500;
   color: #fff;
+  opacity: 1;
+  visibility: visible;
   box-shadow: 0 8px 26px rgba(20, 28, 48, 0.22);
   backdrop-filter: blur(12px);
   animation: test-runner-toast-in 0.25s ease-out;
+  pointer-events: auto;
 }
 
-.toast.success {
+.runner-toast.success {
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.9), rgba(22, 163, 74, 0.92));
   border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
-.toast.error {
+.runner-toast.error {
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(220, 38, 38, 0.92));
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
@@ -1028,13 +1036,13 @@
 }
 
 @media (max-width: 768px) {
-  .toast-container {
+  .runner-toast-container {
     left: 16px;
     right: 16px;
     top: 16px;
   }
 
-  .toast {
+  .runner-toast {
     min-width: 0;
     width: 100%;
   }

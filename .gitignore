@@ -38,6 +38,7 @@ files/baselines/*
 files/diffs/*
 !files/diffs/.gitkeep
 files/screenshots/*
+files/Downloads/*
 !files/screenshots/.gitkeep
 
 # --------------------

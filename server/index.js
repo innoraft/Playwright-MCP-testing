@@ -98,6 +98,9 @@ function detectTestType(content = '') {
   if (/(^|\n)\s*tests\s*:/i.test(content)) {
     return 'general';
   }
+  if (/(^|\n)\s*responsiveness\s*:/i.test(content)) {
+    return 'responsiveness';
+  }
   if (trimmed.startsWith('name:')) {
     return 'visual-regression';
   }
@@ -610,6 +613,7 @@ app.post('/api/tests', requireAuth, async (req, res) => {
     const typeLabels = {
       'general': 'General Test',
       'visual-regression': 'Visual Regression',
+      'responsiveness': 'Responsive Check',
       'performance': 'Performance Metrics',
       'form-validation': 'Form Validation',
     };
@@ -822,6 +826,7 @@ app.post('/api/forms/detect', requireAuth, async (req, res) => {
 // This allows multiple dashboard tabs for the same user to run concurrently.
 const runnerStates = new Map(); // Map<runId, RunnerState>
 const latestRunByUser = new Map(); // Map<userId, runId>
+const MAX_CONCURRENT_RUNS_PER_USER = 5;
 
 function createRunnerState() {
   return {
@@ -919,9 +924,19 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'testName is required' });
   }
 
+  const activeRuns = [...runnerStates.values()]
+    .filter((state) => state.userId === userId && state.status === 'running')
+    .length;
+  if (activeRuns >= MAX_CONCURRENT_RUNS_PER_USER) {
+    return res.status(429).json({
+      error: `Maximum of ${MAX_CONCURRENT_RUNS_PER_USER} concurrent test runs reached. Please wait for a run to complete.`
+    });
+  }
+
   const RUNNER_SCRIPTS = {
     'tool-call': 'ai_tool_runner.js',
     'visual-regression': 'ai_visual_runner.js',
+    'responsiveness': 'ai_responsive_runner.js',
     performance: 'ai_lighthouse_runner.js',
   };
 
@@ -946,6 +961,9 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
     case 'visual-regression':
       runner = 'visual-regression';
       break;
+    case 'responsiveness':
+      runner = 'responsiveness';
+      break;
     case 'general':
     case 'form-validation':
     default:
@@ -969,7 +987,7 @@ app.post('/api/runner/run', requireAuth, (req, res) => {
   runnerEnv.PLAYWRIGHT_RUN_ID = currentRunId;
   runnerEnv.PLAYWRIGHT_RUN_USER = req.user.username || '';
 
-  if (runner === 'tool-call') {
+  if (runner === 'tool-call' || runner === 'responsiveness') {
     runnerEnv.MCP_WORKSPACE_DIR = FILES_DIR;
     runnerEnv.MCP_OUTPUT_DIR = `screenshots/${currentRunId}`;
   }
@@ -1583,10 +1601,12 @@ app.get('/api/files/browse', requireAuth, async (req, res) => {
       const relPath = folder ? `${folder}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
+        const stat = fs.statSync(fullPath);
         items.push({
           name: entry.name,
           path: relPath,
-          type: 'folder'
+          type: 'folder',
+          modified: stat.mtimeMs
         });
       } else {
         // Check ownership: use 'baselines' category for baselines folder,
@@ -1613,6 +1633,7 @@ app.get('/api/files/browse', requireAuth, async (req, res) => {
     // Sort: folders first, then files
     items.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      if (b.modified !== a.modified) return b.modified - a.modified;
       return a.name.localeCompare(b.name);
     });
 
@@ -1718,21 +1739,34 @@ app.delete('/api/files/delete/{*filePath}', requireAuth, async (req, res) => {
     }
 
     const stat = fs.statSync(fullPath);
-    if (stat.isDirectory()) {
-      return res.status(400).json({ error: 'Cannot delete directories through this endpoint' });
-    }
-
-    // Check ownership: baselines use 'baselines' category, others use 'files'
-    const isBaseline = filePath.startsWith('baselines/');
+    const isAdmin = reqIsAdmin(req);
+    const isDirectory = stat.isDirectory();
+    const isBaseline = filePath === 'baselines' || filePath.startsWith('baselines/');
     const ownerCategory = isBaseline ? 'baselines' : 'files';
-    const ownerKey = isBaseline ? path.basename(filePath) : filePath;
-    if (!(await isOwnerOrAdmin(ownerCategory, ownerKey, req.user.userId, reqIsAdmin(req)))) {
-      return res.status(403).json({ error: 'Access denied' });
+    const ownerKeys = isDirectory
+      ? listFilesRecursively(fullPath).map((relativeFile) => {
+        const fullFilePath = path.join(filePath, relativeFile);
+        return isBaseline ? path.basename(fullFilePath) : fullFilePath;
+      })
+      : [isBaseline ? path.basename(filePath) : filePath];
+
+    if (!isAdmin) {
+      for (const ownerKey of ownerKeys) {
+        if (!(await isOwnerOrAdmin(ownerCategory, ownerKey, req.user.userId, false))) {
+          return res.status(403).json({ error: 'Access denied' });
+        }
+      }
     }
 
-    fs.unlinkSync(fullPath);
-    await removeOwner(ownerCategory, ownerKey);
-    res.json({ success: true, message: `Deleted ${filePath}` });
+    if (isDirectory) {
+      fs.rmSync(fullPath, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(fullPath);
+    }
+    for (const ownerKey of ownerKeys) {
+      await removeOwner(ownerCategory, ownerKey);
+    }
+    res.json({ success: true, message: `Deleted ${isDirectory ? 'folder' : 'file'} ${filePath}` });
   } catch (err) {
     console.error('Failed to delete file:', err);
     res.status(500).json({ error: 'Failed to delete file' });

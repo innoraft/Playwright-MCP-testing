@@ -5,17 +5,20 @@ import {
   Image as ImageIcon,
   Plus,
   SearchX,
+  Smartphone,
   Trash2,
   Zap,
 } from 'lucide-react';
 import GeneralTestForm from '../components/GeneralTestForm';
 import VisualRegressionForm from '../components/VisualRegressionForm';
+import ResponsiveTestForm from '../components/ResponsiveTestForm';
 import PerformanceMetricsForm from '../components/PerformanceMetricsForm';
 import { useAuth } from '../hooks/useAuth';
 
 const TABS = [
   { id: 'general', label: 'General Test', icon: FileText },
   { id: 'visual', label: 'Visual Regression', icon: ImageIcon },
+  { id: 'responsive', label: 'Responsive Check', icon: Smartphone },
   { id: 'performance', label: 'Performance Metrics', icon: Zap },
 ];
 
@@ -35,10 +38,12 @@ export default function TestSuites() {
   // Form data for editing
   const [generalData, setGeneralData] = useState(null);
   const [vrData, setVrData] = useState(null);
+  const [responsiveData, setResponsiveData] = useState(null);
   const [performanceData, setPerformanceData] = useState(null);
   const tabToType = {
     general: 'general',
     visual: 'visual-regression',
+    responsive: 'responsiveness',
     performance: 'performance'
   };
 
@@ -46,6 +51,7 @@ export default function TestSuites() {
     const trimmed = content.trimStart().toLowerCase();
     if (trimmed.startsWith('schemaversion:') || /(^|\n)\s*performance\s*:/i.test(content)) return 'performance';
     if (/(^|\n)\s*tests\s*:/i.test(content)) return 'general';
+    if (/(^|\n)\s*responsiveness\s*:/i.test(content)) return 'responsiveness';
     if (trimmed.startsWith('name:')) return 'visual-regression';
     return 'general';
   };
@@ -130,6 +136,21 @@ export default function TestSuites() {
       if (breakpoints.length === 0) breakpoints.push({ width: 1280, height: 720 });
 
       return { testName, url, breakpoints };
+    } else if (type === 'responsiveness') {
+      // Parse responsiveness YAML (name, baseUrl, responsiveness.preSteps, responsiveness.breakpoints)
+      const testName = (content.match(/^name:\s*(.+)$/m)?.[1] || '').trim();
+      const url = (content.match(/^baseUrl:\s*(.+)$/m)?.[1] || '').trim();
+
+      const preSteps = [...content.matchAll(/^\s{4}-\s+"((?:[^"\\]|\\.)*)"\s*$/gm)]
+        .map(m => m[1].replace(/\\"/g, '"'))
+        .join('\n');
+
+      const breakpoints = [...content.matchAll(/^\s*-\s*\{\s*label:\s*"((?:[^"\\]|\\.)*)",\s*width:\s*(\d+),\s*height:\s*(\d+)\s*\}/gm)]
+        .map(m => ({ label: m[1].replace(/\\"/g, '"'), width: parseInt(m[2]), height: parseInt(m[3]) }));
+
+      if (breakpoints.length === 0) breakpoints.push({ label: 'Desktop', width: 1920, height: 1080 });
+
+      return { testName, url, preSteps, breakpoints };
     } else if (type === 'performance') {
       const perfMatch = content.match(/^performance:\s*(.+)$/m);
 
@@ -291,6 +312,10 @@ export default function TestSuites() {
         const parsed = parseTestContent(test.name, data.content, 'visual-regression');
         setVrData(parsed);
         setActiveTab('visual');
+      } else if (test.type === 'responsiveness') {
+        const parsed = parseTestContent(test.name, data.content, 'responsiveness');
+        setResponsiveData(parsed);
+        setActiveTab('responsive');
       } else if (test.type === 'performance') {
         const parsed = parseTestContent(test.name, data.content, 'performance');
         setPerformanceData(parsed);
@@ -310,6 +335,7 @@ export default function TestSuites() {
     setSelectedTest(null);
     setGeneralData(null);
     setVrData(null);
+    setResponsiveData(null);
     setPerformanceData(null);
   };
 
@@ -524,6 +550,8 @@ export default function TestSuites() {
                     <span className="test-list-item-icon">
                       {test.type === 'visual-regression' ? (
                         <ImageIcon size={16} strokeWidth={2} aria-hidden="true" />
+                      ) : test.type === 'responsiveness' ? (
+                        <Smartphone size={16} strokeWidth={2} aria-hidden="true" />
                       ) : test.type === 'performance' ? (
                         <Zap size={16} strokeWidth={2} aria-hidden="true" />
                       ) : (
@@ -600,6 +628,15 @@ export default function TestSuites() {
               <VisualRegressionForm
                 key={selectedTest?.name || 'new-visual'}
                 initialData={vrData}
+                onSave={handleSave}
+                saving={saving}
+              />
+            )}
+
+            {activeTab === 'responsive' && (
+              <ResponsiveTestForm
+                key={selectedTest?.name || 'new-responsive'}
+                initialData={responsiveData}
                 onSave={handleSave}
                 saving={saving}
               />
