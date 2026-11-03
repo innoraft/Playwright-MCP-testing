@@ -261,6 +261,7 @@
   opacity: 0;
   border: none;
   background: transparent;
+  color: var(--error);
   border-radius: 4px;
   padding: 4px 6px;
   font-size: 14px;
@@ -275,6 +276,7 @@
 
 .fb-delete-btn:hover {
   background: rgba(239, 68, 68, 0.14);
+  color: var(--error);
   transform: scale(1.12);
 }
 
@@ -462,7 +464,9 @@
 }
 
 .fb-confirm-icon {
-  font-size: 36px;
+  display: flex;
+  justify-content: center;
+  color: var(--error);
   margin-bottom: 12px;
 }
 
@@ -497,8 +501,8 @@
 
 .fb-btn-secondary {
   border: 1px solid var(--section-border);
-  background: #fff;
-  color: var(--text-secondary);
+  background: var(--input-bg);
+  color: var(--text-primary);
 }
 
 .fb-btn-secondary:hover {

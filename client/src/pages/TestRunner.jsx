@@ -27,7 +27,7 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), type === 'error' ? 6000 : 3500);
   }, []);
 
   // ── Load test list ────────────────────────────────────
@@ -237,7 +237,9 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || 'Failed to start test');
+        const requestError = new Error(err.error || 'Failed to start test');
+        requestError.status = res.status;
+        throw requestError;
       }
 
       const data = await res.json();
@@ -302,8 +304,8 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
     <div className="page-container page-container-wide">
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast ${toast.type}`}>
+        <div className="runner-toast-container">
+          <div className={`runner-toast ${toast.type}`} role="alert" aria-live="assertive" aria-atomic="true">
             <span>{toast.type === 'success' ? '✓' : '✕'}</span>
             {toast.message}
           </div>
