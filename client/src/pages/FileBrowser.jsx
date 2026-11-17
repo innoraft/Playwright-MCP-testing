@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Trash2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
@@ -201,11 +202,15 @@ export default function FileBrowser() {
       {deleteConfirm && (
         <div className="fb-confirm-overlay" onClick={() => setDeleteConfirm(null)}>
           <div className="fb-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="fb-confirm-icon">🗑️</div>
-            <h3>Delete File</h3>
+            <div className="fb-confirm-icon">
+              <Trash2 size={38} strokeWidth={1.8} aria-hidden="true" />
+            </div>
+            <h3>Delete {deleteConfirm.type === 'folder' ? 'Folder' : 'File'}</h3>
             <p>Are you sure you want to delete <strong>{deleteConfirm.name}</strong>?</p>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              This action cannot be undone.
+              {deleteConfirm.type === 'folder'
+                ? 'All files inside this folder will also be deleted.'
+                : 'This action cannot be undone.'}
             </p>
             <div className="fb-confirm-actions">
               <button
@@ -299,11 +304,23 @@ export default function FileBrowser() {
                         setDeleteConfirm(item);
                       }}
                     >
-                      🗑️
+                      <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
                     </button>
                   )}
-                  {item.type === 'folder' && (
-                    <span className="fb-folder-arrow">›</span>
+                  {item.type === 'folder' && currentPath !== '' && (
+                    <>
+                      <button
+                        className="fb-delete-btn"
+                        title="Delete folder"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteConfirm(item);
+                        }}
+                      >
+                        <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
+                      </button>
+                      <span className="fb-folder-arrow">›</span>
+                    </>
                   )}
                 </div>
               ))

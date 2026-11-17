@@ -16,6 +16,12 @@ export class ScreencastService {
 
     this.socket = null;
     this.active = false;
+    this.port = null;
+    this.targetId = null;
+    this.targetMonitor = null;
+    this.targetSyncPromise = null;
+    this.isStopping = false;
+    this.knownTargetIds = new Set();
   }
 
   /**
@@ -26,78 +32,156 @@ export class ScreencastService {
    */
   async start(port) {
     try {
-      let wsUrl = null;
-
+      this.isStopping = false;
+      this.port = port;
+      let page = null;
       for (let i = 0; i < 30; i++) {
         const resp =
           await fetch(`http://127.0.0.1:${port}/json`);
 
         const targets = await resp.json();
 
-        const page =
-          targets.find(t => t.type === 'page');
+        page = targets.find(t => t.type === 'page');
 
         if (page) {
-          wsUrl = page.webSocketDebuggerUrl;
           break;
         }
 
         await new Promise(r => setTimeout(r, 500));
       }
 
-      if (!wsUrl) {
+      if (!page) {
         this.log.warn('No page target');
         return;
       }
 
-      this.socket = new WebSocket(wsUrl);
+      const targets = await this.getPageTargets();
+      this.knownTargetIds = new Set(targets.map(target => target.id));
+      await this.runTargetSync(() => this.attachToPage(page), false);
+      this.targetMonitor = setInterval(() => this.syncPageTarget(), 500);
+
+      this.log.success('Screencast started');
+    } catch (err) {
+      this.log.warn+(
+        `Failed to start screencast: ${err.message}`
+      );
+    }
+  }
+
+  async getPageTargets() {
+    const response = await fetch(`http://127.0.0.1:${this.port}/json`);
+    const targets = await response.json();
+    return targets.filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  }
+
+  async syncPageTarget() {
+    if (this.isStopping || this.targetSyncPromise) return;
+
+    return this.runTargetSync(async () => {
+    const targets = await this.getPageTargets();
+    if (this.isStopping) return;
+
+    const targetIds = new Set(targets.map(target => target.id));
+    const currentTarget = targets.find(target => target.id === this.targetId);
+    const newTarget = targets.find(target => !this.knownTargetIds.has(target.id));
+    const nextTarget = newTarget || (currentTarget ? null : targets.at(-1));
+
+    if (nextTarget && nextTarget.id !== this.targetId) {
+      await this.attachToPage(nextTarget);
+    }
+
+    if (!this.isStopping) {
+      this.knownTargetIds = targetIds;
+    }
+    });
+  }
+
+  async runTargetSync(operation, logFailure = true) {
+    let targetSyncPromise = Promise.resolve().then(operation);
+    if (logFailure) {
+      targetSyncPromise = targetSyncPromise.catch(err => {
+        this.log.warn(`Failed to switch screencast target: ${err.message}`);
+      });
+    }
+    this.targetSyncPromise = targetSyncPromise.finally(() => {
+        this.targetSyncPromise = null;
+      });
+    return this.targetSyncPromise;
+  }
+
+  async attachToPage(page) {
+    if (this.isStopping) return;
+
+    const wsUrl = page.webSocketDebuggerUrl;
+    if (!wsUrl) return;
+
+    await this.closeSocket();
+    const socket = new WebSocket(wsUrl);
 
       await new Promise((res, rej) => {
-        this.socket.on('open', res);
-        this.socket.on('error', rej);
+      socket.on('open', res);
+      socket.on('error', rej);
       });
+
+    if (this.isStopping) {
+      socket.close();
+      return;
+    }
 
       let msgId = 1;
 
-      this.socket.send(JSON.stringify({
-        id: msgId++,
-        method: 'Page.startScreencast',
-        params: {
-          format: 'jpeg',
-          quality: 40,
-          maxWidth: this.config.viewport.width,
-          maxHeight: this.config.viewport.height,
-          everyNthFrame: 2
-        }
-      }));
+    socket.send(JSON.stringify({
+      id: msgId++,
+      method: 'Page.startScreencast',
+      params: {
+        format: 'jpeg',
+        quality: 40,
+        maxWidth: this.config.viewport.width,
+        maxHeight: this.config.viewport.height,
+        everyNthFrame: 2
+      }
+    }));
 
+    this.socket = socket;
+    this.targetId = page.id;
       this.active = true;
 
-      this.socket.on('message', raw => {
-        const msg = JSON.parse(raw.toString());
+    socket.on('message', raw => {
+      const msg = JSON.parse(raw.toString());
 
-        if (msg.method === 'Page.screencastFrame') {
-          this.socket.send(JSON.stringify({
-            id: msgId++,
-            method: 'Page.screencastFrameAck',
-            params: {
-              sessionId: msg.params.sessionId
-            }
-          }));
+      if (msg.method === 'Page.screencastFrame') {
+        socket.send(JSON.stringify({
+          id: msgId++,
+          method: 'Page.screencastFrameAck',
+          params: {
+            sessionId: msg.params.sessionId
+          }
+        }));
 
+        if (socket === this.socket) {
           process.stdout.write(
             `__SCREENCAST_FRAME__${msg.params.data}\n`
           );
         }
-      });
+      }
+    });
+  }
 
-      this.log.success('Screencast started');
+  async closeSocket() {
+    if (!this.socket) return;
 
-    } catch (err) {
-      this.log.warn(
-        `Failed to start screencast: ${err.message}`
-      );
-    }
+    const socket = this.socket;
+    this.socket = null;
+    this.active = false;
+    try {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          id: 9999,
+          method: 'Page.stopScreencast'
+        }));
+      }
+      socket.close();
+    } catch {}
   }
 
   /**
@@ -106,19 +190,16 @@ export class ScreencastService {
    * @returns {Promise<void>}
    */
   async stop() {
-    if (!this.socket) return;
-
-    try {
-      this.socket.send(JSON.stringify({
-        id: 9999,
-        method: 'Page.stopScreencast'
-      }));
-
-      this.socket.close();
-
-    } catch {}
-
-    this.socket = null;
+    this.isStopping = true;
+    if (this.targetMonitor) {
+      clearInterval(this.targetMonitor);
+      this.targetMonitor = null;
+    }
+    await this.targetSyncPromise?.catch(() => {});
+    await this.closeSocket();
+    this.targetId = null;
+    this.port = null;
+    this.knownTargetIds.clear();
     this.active = false;
   }
 }

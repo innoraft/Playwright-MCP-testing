@@ -1,35 +1,43 @@
-/* Toast */
-.toast-container {
+/* Toast (prefixed to avoid colliding with Bootstrap's .toast, which hides
+   elements lacking its JS-managed .show class) */
+.runner-toast-container {
   position: fixed;
   top: 24px;
   right: 24px;
-  z-index: 1100;
+  z-index: 9999;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: min(420px, calc(100vw - 48px));
+  pointer-events: none;
 }
 
-.toast {
-  min-width: 280px;
+.runner-toast {
+  width: 100%;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 14px 20px;
   border-radius: var(--radius-md);
   font-size: 14px;
+  line-height: 1.4;
   font-weight: 500;
   color: #fff;
+  opacity: 1;
+  visibility: visible;
   box-shadow: 0 8px 26px rgba(20, 28, 48, 0.22);
   backdrop-filter: blur(12px);
   animation: test-runner-toast-in 0.25s ease-out;
+  pointer-events: auto;
 }
 
-.toast.success {
+.runner-toast.success {
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.9), rgba(22, 163, 74, 0.92));
   border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
-.toast.error {
+.runner-toast.error {
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(220, 38, 38, 0.92));
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
@@ -54,6 +62,7 @@
 }
 
 .runner-select-group {
+  position: relative;
   flex: 1;
   min-width: 0;
 }
@@ -62,6 +71,111 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.runner-test-selector {
+  display: flex;
+  align-items: center;
+  text-align: left;
+}
+
+.runner-test-selector-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runner-test-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(420px, calc(100vh - 220px));
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--input-border-focus);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  box-shadow: var(--shadow-card);
+}
+
+.runner-test-search {
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--section-bg);
+  color: var(--input-text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.runner-test-search:focus {
+  border-color: var(--input-border-focus);
+}
+
+.runner-test-options {
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--input-border-hover) transparent;
+}
+
+.runner-test-options::-webkit-scrollbar {
+  width: 10px;
+}
+
+.runner-test-options::-webkit-scrollbar-track {
+  margin: 4px 0;
+  background: transparent;
+}
+
+.runner-test-options::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--input-border-hover);
+  background-clip: padding-box;
+}
+
+.runner-test-options::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+  background-clip: padding-box;
+}
+
+.runner-test-option {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--input-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+.runner-test-option:hover,
+.runner-test-option:focus-visible,
+.runner-test-option.selected {
+  outline: none;
+  background: var(--accent-fade);
+  color: var(--text-primary);
+}
+
+.runner-test-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
 }
 
 .form-label-icon {
@@ -1028,13 +1142,13 @@
 }
 
 @media (max-width: 768px) {
-  .toast-container {
+  .runner-toast-container {
     left: 16px;
     right: 16px;
     top: 16px;
   }
 
-  .toast {
+  .runner-toast {
     min-width: 0;
     width: 100%;
   }

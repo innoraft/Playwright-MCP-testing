@@ -5,12 +5,19 @@ import * as yaml from "js-yaml";
 import { z } from "zod";
 import { setMaxListeners } from "node:events";
 import { Agent, run } from "@openai/agents";
-import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { generateHtmlReport } from "./tool-call-report-generator.js";
 import { CDPService } from './src/cdp/cdp.service.js';
 import * as settingsRepo from './server/db/repositories/settingsRepo.js';
 import { findChromiumPath } from './src/utils/browser-utils.js';
+import { buildMcpServer as buildMcpServerShared } from './src/utils/mcp-stdio-server.js';
+import {
+  toDataUriFromPng,
+  collectChunkScreenshotsByStep,
+  findLatestScreenshot,
+  captureFailureScreenshot,
+} from './src/utils/screenshot-utils.js';
+import { moveDownloadedFiles } from './src/utils/downloads-utils.js';
+import { chunkSteps, getUserFriendlyStepFailure } from './src/utils/step-utils.js';
 
 setMaxListeners(50);
 
@@ -56,405 +63,27 @@ const chunkResultSchema = z.object({
     .describe("True if execution stopped before completing all steps due to a failure"),
 });
 
-// MCP Server (Stdio transport)
-
-class MCPServerSdkStdio {
-  cacheToolsList = true;
-  toolFilter;
-  toolMetaResolver;
-  errorFunction;
-  allowBrowserClose = true;
-  _cachedTools;
-  _client;
-  _transport;
-
-  constructor(options = {}) {
-    this._name = options.name ?? "playwright";
-    this._command = options.command ?? "npx";
-    this._args = options.args ?? [];
-    this._cwd = options.cwd;
-    this._env = options.env;
-    this.cacheToolsList = options.cacheToolsList ?? true;
-    this.toolFilter = options.toolFilter;
-    this.toolMetaResolver = options.toolMetaResolver;
-    this.errorFunction = options.errorFunction;
-  }
-
-  get name() {
-    return this._name;
-  }
-
-  async connect() {
-    if (this._client) {
-      return;
-    }
-
-    console.log(`\n[MCP] Connecting to Playwright MCP...`);
-    console.log(`[MCP] Command: ${this._command} ${this._args.join(" ")}`);
-
-    this._transport = new StdioClientTransport({
-      command: this._command,
-      args: this._args,
-      cwd: this._cwd,
-      stderr: "inherit",
-      env: this._env,
-    });
-
-    this._client = new MCPClient({
-      name: "stateless-mcp-runner",
-      version: "2.0.0",
-    });
-
-    await this._client.connect(this._transport);
-    console.log(`[MCP] Connected successfully\n`);
-  }
-
-  async close() {
-    if (!this._client) {
-      return;
-    }
-
-    try {
-      await this._client.close();
-    } finally {
-      this._client = undefined;
-      this._transport = undefined;
-      this._cachedTools = undefined;
-    }
-  }
-
-  async listTools() {
-    if (this.cacheToolsList && this._cachedTools) {
-      return this._cachedTools;
-    }
-
-    try {
-      console.log(`[MCP] Fetching available tools...`);
-      const result = await this._client.listTools();
-      const tools = (result?.tools ?? []).map((toolDef) => ({
-        name: toolDef.name,
-        description: toolDef.description,
-        inputSchema: {
-          type: "object",
-          properties: toolDef.inputSchema?.properties ?? {},
-          required: toolDef.inputSchema?.required ?? [],
-          additionalProperties: toolDef.inputSchema?.additionalProperties ?? true,
-        },
-      }));
-
-      console.log(`[MCP] Found ${tools.length} tools: ${tools.map((t) => t.name).join(", ")}`);
-
-      if (this.cacheToolsList) {
-        this._cachedTools = tools;
-      }
-
-      return tools;
-    } catch (error) {
-      console.error(`[MCP] Failed to list tools:`, error);
-      throw error;
-    }
-  }
-
-  async callTool(toolName, args, meta) {
-    try {
-      if (toolName === "browser_close" && !this.allowBrowserClose) {
-        console.log("[MCP] Skipping browser_close to preserve session across chunks");
-        return [
-          {
-            type: "text",
-            text: "### Result\nSkipped browser_close to keep session alive for next chunks.",
-          },
-        ];
-      }
-
-      console.log(`[MCP] Calling tool: ${toolName} with args: ${JSON.stringify(args).slice(0, 200)}`);
-      const result = await this._client.callTool({
-        name: toolName,
-        arguments: args ?? {},
-        _meta: meta ?? undefined,
-      });
-
-      // Ensure we return the content array in the expected format
-      let content = result?.content ?? [];
-      if (!Array.isArray(content)) {
-        content = [{ type: "text", text: JSON.stringify(content) }];
-      }
-      console.log(`[MCP] Tool result: ${JSON.stringify(content).slice(0, 200)}`);
-      return content;
-    } catch (error) {
-      console.error(`[MCP] Tool call failed:`, error);
-      throw error;
-    }
-  }
-
-  async listResources(params = {}) {
-    return this._client.listResources(params);
-  }
-
-  async listResourceTemplates(params = {}) {
-    return this._client.listResourceTemplates(params);
-  }
-
-  async readResource(uri) {
-    return this._client.readResource({ uri });
-  }
-
-  async invalidateToolsCache() {
-    this._cachedTools = undefined;
-  }
-}
-
 // Build MCP Server
 
 function buildMcpServer(cdpPort) {
-  const args = ["@playwright/mcp"];
-  const finalCdpEndpoint = cdpPort ? `http://127.0.0.1:${cdpPort}` : MCP_CDP_ENDPOINT;
-  if (finalCdpEndpoint) {
-    args.push("--cdp-endpoint", finalCdpEndpoint);
-    if (MCP_ISOLATED) {
-      args.push("--isolated");
-    }
-  } else {
-    // Use a clean Playwright-managed browser profile to avoid native password/change-password prompts.
-    if (MCP_HEADLESS) {
-      args.push("--headless");
-    }
-    if (MCP_BROWSER) {
-      args.push("--browser", MCP_BROWSER);
-    }
-    if (MCP_ISOLATED) {
-      args.push("--isolated");
-    }
-  }
-  args.push(
-    "--ignore-https-errors",
-    "--output-dir",
-    MCP_OUTPUT_DIR,
-    "--viewport-size",
-    `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}`,
-    "--image-responses",
-    "omit"
-  );
-
-  return new MCPServerSdkStdio({
-    name: "playwright",
+  return buildMcpServerShared({
+    cdpPort,
+    cdpEndpoint: MCP_CDP_ENDPOINT,
     command: MCP_COMMAND,
-    args,
-    cwd: MCP_WORKSPACE_DIR,
-    env: { 
-      ...process.env,
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --unhandled-rejections=warn`.trim()
-    },
+    workspaceDir: MCP_WORKSPACE_DIR,
+    outputDir: MCP_OUTPUT_DIR,
+    viewportWidth: VIEWPORT_WIDTH,
+    viewportHeight: VIEWPORT_HEIGHT,
+    browser: MCP_BROWSER,
+    isolated: MCP_ISOLATED,
+    headless: MCP_HEADLESS,
   });
 }
 
 // Helpers
 
-/**
- * Splits steps into chunks of specified size.
- */
-function chunkSteps(steps, chunkSize = CHUNK_SIZE) {
-  const chunks = [];
-  for (let i = 0; i < steps.length; i += chunkSize) {
-    chunks.push(steps.slice(i, i + chunkSize));
-  }
-  return chunks;
-}
-
-function getUserFriendlyStepFailure(errorMessage) {
-  const message = String(errorMessage || '').toLowerCase();
-
-  if (message.includes('timeout')) {
-    return 'The page took too long to respond. Check your internet connection or confirm that the page and requested element are available.';
-  }
-  if (message.includes('locator') || message.includes('selector') || message.includes('not found')) {
-    return 'The requested element could not be found on the page. Check that the page loaded correctly and that the element details are accurate.';
-  }
-  if (message.includes('navigation') || message.includes('net::err_')) {
-    return 'The browser could not open or load the requested page. Check that the URL is correct and reachable.';
-  }
-  if (message.includes('download')) {
-    return 'The file could not be downloaded. Check that the download link is available and that the server returned the file.';
-  }
-
-  return 'The browser could not complete this step. Check the page state, requested action, and any data supplied to the step.';
-}
-
-/**
- * Programmatic screenshot capture as fallback when agent doesn't take one.
- * Returns base64 data URI or null.
- */
-async function captureFailureScreenshot(server) {
-  try {
-    console.log(`  📸 Taking fallback failure screenshot...`);
-    const result = await server.callTool("browser_take_screenshot", {});
-    const content = result?.content ?? result;
-
-    if (Array.isArray(content)) {
-      for (const item of content) {
-        // MCP screenshot returns image as base64 in the content
-        if (item.type === "image" && item.data) {
-          return `data:${item.mimeType || "image/png"};base64,${item.data}`;
-        }
-      }
-      // Sometimes the screenshot path is returned as text
-      for (const item of content) {
-        if (item.type === "text" && item.text) {
-          // Check if MCP saved a file — read it and convert to base64
-          const match = item.text.match(/Screenshot saved to[:\s]+(.+\.png)/i);
-          if (match) {
-            const screenshotPath = match[1].trim();
-            if (fs.existsSync(screenshotPath)) {
-              const imgBuffer = fs.readFileSync(screenshotPath);
-              return `data:image/png;base64,${imgBuffer.toString("base64")}`;
-            }
-          }
-        }
-      }
-    }
-
-    return null;
-  } catch (err) {
-    console.error(`  ⚠️ Failed to capture fallback screenshot:`, err.message ?? err);
-    return null;
-  }
-}
-
-function toDataUriFromPng(filePath) {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return null;
-    const imgBuffer = fs.readFileSync(filePath);
-    return `data:image/png;base64,${imgBuffer.toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
-
-function listScreenshotsWithMtime(outputDir) {
-  if (!fs.existsSync(outputDir)) return [];
-  return fs
-    .readdirSync(outputDir)
-    .filter((f) => f.endsWith(".png"))
-    .map((f) => {
-      const fullPath = path.join(outputDir, f);
-      return {
-        name: f,
-        fullPath,
-        mtime: fs.statSync(fullPath).mtimeMs,
-      };
-    })
-    .sort((a, b) => a.mtime - b.mtime);
-}
-
-function parseStepNumberFromScreenshotName(fileName) {
-  if (!fileName) return null;
-  const match = fileName.match(/(?:^|[_-])step[_-]?(\d+)(?:[_-]|\.|$)/i);
-  if (!match) return null;
-  const n = Number(match[1]);
-  return Number.isFinite(n) ? n : null;
-}
-
-function collectChunkScreenshotsByStep(outputDir, chunkStartMs, chunkStepNumbers) {
-  const byStep = new Map();
-  const chunkSet = new Set(chunkStepNumbers);
-  const fresh = listScreenshotsWithMtime(outputDir).filter((f) => f.mtime >= chunkStartMs);
-  const unassigned = [];
-
-  for (const file of fresh) {
-    const uri = toDataUriFromPng(file.fullPath);
-    if (!uri) continue;
-    const parsedStep = parseStepNumberFromScreenshotName(file.name);
-    if (parsedStep && chunkSet.has(parsedStep)) {
-      const arr = byStep.get(parsedStep) ?? [];
-      arr.push(uri);
-      byStep.set(parsedStep, arr);
-    } else {
-      unassigned.push(uri);
-    }
-  }
-
-  // Fallback assignment for screenshots without step-based filename.
-  if (unassigned.length > 0) {
-    let cursor = 0;
-    for (const stepNum of chunkStepNumbers) {
-      if (cursor >= unassigned.length) break;
-      const arr = byStep.get(stepNum) ?? [];
-      if (arr.length === 0) {
-        arr.push(unassigned[cursor]);
-        cursor += 1;
-        byStep.set(stepNum, arr);
-      }
-    }
-  }
-
-  return byStep;
-}
-
-// MCP always names its own screenshot/PDF/trace output "page-<ISO timestamp>.<ext>".
-// Anything else in the output dir is a real browser download (any file type: image, video, pdf, zip...).
-const MCP_GENERATED_FILE_RE = /^(?:page-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z|step-\d+-[^.]+)\.[a-z0-9]+$/i;
-
-/**
- * The MCP server saves every file it produces (screenshots, PDFs and
- * browser downloads) into the same --output-dir. Move anything that
- * isn't MCP's own generated output into files/Downloads so downloaded
- * files show up where users expect them, regardless of file type.
- */
-function moveDownloadedFiles(outputDir, downloadsDir) {
-  try {
-    if (!fs.existsSync(outputDir)) return;
-
-    const downloadedFiles = fs
-      .readdirSync(outputDir)
-      .filter((f) => !MCP_GENERATED_FILE_RE.test(f))
-      .map((f) => path.join(outputDir, f))
-      .filter((f) => fs.statSync(f).isFile());
-
-    if (downloadedFiles.length === 0) return;
-
-    fs.mkdirSync(downloadsDir, { recursive: true });
-
-    for (const filePath of downloadedFiles) {
-      const ext = path.extname(filePath);
-      const base = path.basename(filePath, ext);
-      let destPath = path.join(downloadsDir, `${base}${ext}`);
-      let suffix = 1;
-      while (fs.existsSync(destPath)) {
-        destPath = path.join(downloadsDir, `${base}_${suffix}${ext}`);
-        suffix += 1;
-      }
-      fs.renameSync(filePath, destPath);
-      console.log(`  📥 Download saved: ${path.relative(MCP_WORKSPACE_DIR, destPath)}`);
-    }
-  } catch (err) {
-    console.error(`  ⚠️ Failed to move downloaded files:`, err.message ?? err);
-  }
-}
-
-/**
- * Try to find a screenshot file from the output directory for the most recent capture.
- */
-function findLatestScreenshot(outputDir) {
-  try {
-    if (!fs.existsSync(outputDir)) return null;
-    const files = fs
-      .readdirSync(outputDir)
-      .filter((f) => f.endsWith(".png"))
-      .map((f) => ({
-        name: f,
-        mtime: fs.statSync(path.join(outputDir, f)).mtimeMs,
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-
-    if (files.length === 0) return null;
-
-    const latestPath = path.join(outputDir, files[0].name);
-    const imgBuffer = fs.readFileSync(latestPath);
-    return `data:image/png;base64,${imgBuffer.toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
+// chunkSteps, getUserFriendlyStepFailure, captureFailureScreenshot, toDataUriFromPng,
+// collectChunkScreenshotsByStep, moveDownloadedFiles and findLatestScreenshot now live in src/utils/.
 
 // Main
 
@@ -855,7 +484,7 @@ async function main() {
       ? `${safeSuiteName}-${PLAYWRIGHT_RUN_ID}`
       : reportFileBaseName || fallbackFolderName;
     const downloadsDir = path.resolve(MCP_WORKSPACE_DIR, "Downloads", runFolderName);
-    moveDownloadedFiles(screenshotsOutputDir, downloadsDir);
+    moveDownloadedFiles(screenshotsOutputDir, downloadsDir, MCP_WORKSPACE_DIR);
   }
 }
 
