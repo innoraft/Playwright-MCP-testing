@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { load } from 'js-yaml';
 import {
   FileText,
   FolderOpen,
@@ -137,16 +138,30 @@ export default function TestSuites() {
 
       return { testName, url, breakpoints };
     } else if (type === 'responsiveness') {
-      // Parse responsiveness YAML (name, baseUrl, responsiveness.preSteps, responsiveness.breakpoints)
-      const testName = (content.match(/^name:\s*(.+)$/m)?.[1] || '').trim();
-      const url = (content.match(/^baseUrl:\s*(.+)$/m)?.[1] || '').trim();
+      let document = {};
+      try {
+        document = load(content) || {};
+      } catch {
+        document = {};
+      }
 
-      const preSteps = [...content.matchAll(/^\s{4}-\s+"((?:[^"\\]|\\.)*)"\s*$/gm)]
-        .map(m => m[1].replace(/\\"/g, '"'))
-        .join('\n');
-
-      const breakpoints = [...content.matchAll(/^\s*-\s*\{\s*label:\s*"((?:[^"\\]|\\.)*)",\s*width:\s*(\d+),\s*height:\s*(\d+)\s*\}/gm)]
-        .map(m => ({ label: m[1].replace(/\\"/g, '"'), width: parseInt(m[2]), height: parseInt(m[3]) }));
+      const responsiveness = document.responsiveness && typeof document.responsiveness === 'object'
+        ? document.responsiveness
+        : {};
+      const testName = typeof document.name === 'string' ? document.name : '';
+      const url = typeof document.baseUrl === 'string' ? document.baseUrl : '';
+      const preSteps = Array.isArray(responsiveness.preSteps)
+        ? responsiveness.preSteps.map(step => String(step)).join('\n')
+        : '';
+      const breakpoints = Array.isArray(responsiveness.breakpoints)
+        ? responsiveness.breakpoints
+          .filter(breakpoint => breakpoint && typeof breakpoint === 'object')
+          .map(({ label, width, height }) => ({
+            label: typeof label === 'string' ? label : '',
+            width: Number(width) || 0,
+            height: Number(height) || 0,
+          }))
+        : [];
 
       if (breakpoints.length === 0) breakpoints.push({ label: 'Desktop', width: 1920, height: 1080 });
 

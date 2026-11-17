@@ -19,6 +19,8 @@ export class ScreencastService {
     this.port = null;
     this.targetId = null;
     this.targetMonitor = null;
+    this.targetSyncPromise = null;
+    this.isStopping = false;
     this.knownTargetIds = new Set();
   }
 
@@ -30,6 +32,7 @@ export class ScreencastService {
    */
   async start(port) {
     try {
+      this.isStopping = false;
       this.port = port;
       let page = null;
       for (let i = 0; i < 30; i++) {
@@ -54,16 +57,12 @@ export class ScreencastService {
 
       const targets = await this.getPageTargets();
       this.knownTargetIds = new Set(targets.map(target => target.id));
-      await this.attachToPage(page);
-      this.targetMonitor = setInterval(() => {
-        this.syncPageTarget().catch(err => {
-          this.log.warn(`Failed to switch screencast target: ${err.message}`);
-        });
-      }, 500);
+      await this.runTargetSync(() => this.attachToPage(page), false);
+      this.targetMonitor = setInterval(() => this.syncPageTarget(), 500);
 
       this.log.success('Screencast started');
     } catch (err) {
-      this.log.warn(
+      this.log.warn+(
         `Failed to start screencast: ${err.message}`
       );
     }
@@ -76,7 +75,12 @@ export class ScreencastService {
   }
 
   async syncPageTarget() {
+    if (this.isStopping || this.targetSyncPromise) return;
+
+    return this.runTargetSync(async () => {
     const targets = await this.getPageTargets();
+    if (this.isStopping) return;
+
     const targetIds = new Set(targets.map(target => target.id));
     const currentTarget = targets.find(target => target.id === this.targetId);
     const newTarget = targets.find(target => !this.knownTargetIds.has(target.id));
@@ -86,10 +90,28 @@ export class ScreencastService {
       await this.attachToPage(nextTarget);
     }
 
-    this.knownTargetIds = targetIds;
+    if (!this.isStopping) {
+      this.knownTargetIds = targetIds;
+    }
+    });
+  }
+
+  async runTargetSync(operation, logFailure = true) {
+    let targetSyncPromise = Promise.resolve().then(operation);
+    if (logFailure) {
+      targetSyncPromise = targetSyncPromise.catch(err => {
+        this.log.warn(`Failed to switch screencast target: ${err.message}`);
+      });
+    }
+    this.targetSyncPromise = targetSyncPromise.finally(() => {
+        this.targetSyncPromise = null;
+      });
+    return this.targetSyncPromise;
   }
 
   async attachToPage(page) {
+    if (this.isStopping) return;
+
     const wsUrl = page.webSocketDebuggerUrl;
     if (!wsUrl) return;
 
@@ -100,6 +122,11 @@ export class ScreencastService {
       socket.on('open', res);
       socket.on('error', rej);
       });
+
+    if (this.isStopping) {
+      socket.close();
+      return;
+    }
 
       let msgId = 1;
 
@@ -163,10 +190,12 @@ export class ScreencastService {
    * @returns {Promise<void>}
    */
   async stop() {
+    this.isStopping = true;
     if (this.targetMonitor) {
       clearInterval(this.targetMonitor);
       this.targetMonitor = null;
     }
+    await this.targetSyncPromise?.catch(() => {});
     await this.closeSocket();
     this.targetId = null;
     this.port = null;

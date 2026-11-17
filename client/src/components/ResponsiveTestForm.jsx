@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { dump } from 'js-yaml';
 
 export default function ResponsiveTestForm({ initialData, onSave, saving }) {
   const [testName, setTestName] = useState(initialData?.testName || '');
@@ -63,19 +64,14 @@ export default function ResponsiveTestForm({ initialData, onSave, saving }) {
       .map(s => s.trim())
       .filter(Boolean);
 
-    const lines = [`name: ${testName}`, `baseUrl: ${url}`, `responsiveness:`];
-
-    if (preStepLines.length > 0) {
-      lines.push(`  preSteps:`);
-      preStepLines.forEach(step => lines.push(`    - "${step.replace(/"/g, '\\"')}"`));
-    }
-
-    lines.push(`  breakpoints:`);
-    breakpoints.forEach(bp => {
-      lines.push(`    - { label: "${bp.label.replace(/"/g, '\\"')}", width: ${bp.width}, height: ${bp.height} }`);
-    });
-
-    return `${lines.join('\n')}\n`;
+    return dump({
+      name: testName,
+      baseUrl: url,
+      responsiveness: {
+        ...(preStepLines.length > 0 ? { preSteps: preStepLines } : {}),
+        breakpoints: breakpoints.map(({ label, width, height }) => ({ label, width, height })),
+      },
+    }, { lineWidth: -1, noRefs: true });
   };
 
   // ── Save ──────────────────────────────────────────────
@@ -172,10 +168,11 @@ export default function ResponsiveTestForm({ initialData, onSave, saving }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label form-label-sm">
+              <label className="form-label form-label-sm" htmlFor={`rt-breakpoint-${index}-label`}>
                 Label <span className="form-required">*</span>
               </label>
               <input
+                id={`rt-breakpoint-${index}-label`}
                 className={`form-input ${errors[`bp-${index}-label`] ? 'form-input-error' : ''}`}
                 type="text"
                 placeholder="Desktop"
@@ -189,10 +186,11 @@ export default function ResponsiveTestForm({ initialData, onSave, saving }) {
 
             <div className="bp-row">
               <div className="form-group bp-field">
-                <label className="form-label form-label-sm">
+                <label className="form-label form-label-sm" htmlFor={`rt-breakpoint-${index}-width`}>
                   Width (px) <span className="form-required">*</span>
                 </label>
                 <input
+                  id={`rt-breakpoint-${index}-width`}
                   className={`form-input ${errors[`bp-${index}-width`] ? 'form-input-error' : ''}`}
                   type="number"
                   min="1"
@@ -208,10 +206,11 @@ export default function ResponsiveTestForm({ initialData, onSave, saving }) {
               <span className="bp-separator">×</span>
 
               <div className="form-group bp-field">
-                <label className="form-label form-label-sm">
+                <label className="form-label form-label-sm" htmlFor={`rt-breakpoint-${index}-height`}>
                   Height (px) <span className="form-required">*</span>
                 </label>
                 <input
+                  id={`rt-breakpoint-${index}-height`}
                   className={`form-input ${errors[`bp-${index}-height`] ? 'form-input-error' : ''}`}
                   type="number"
                   min="1"

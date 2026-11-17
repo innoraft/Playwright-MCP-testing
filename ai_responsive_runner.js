@@ -280,6 +280,7 @@ async function main() {
       });
       reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
       console.log(`📄 Partial report saved: ${reportPath}`);
+      console.log(`__REPORT_FILE__${path.basename(reportPath)}`);
     } catch (err) {
       console.error(`Failed to generate partial report:`, err.message);
     }
@@ -386,7 +387,7 @@ async function main() {
         `Then repeat: scroll down toward the next distinct section of the page (e.g. hero, feature block, testimonials, pricing, footer), wait briefly for the page to settle, and capture a screenshot. Inspect the page and choose the appropriate Playwright tool for scrolling, including the correct scroll container if the page uses a custom one.`,
         `Continue section by section until you capture the page footer, then stop. Do not scroll past the footer and do not capture the same section twice.`,
         `Capture at most ${MAX_SECTIONS_PER_BREAKPOINT} sections total.`,
-        `Save each screenshot using the filename pattern "${safeName(suiteName)}_${safeName(bp.label)}_section-<N>.png", where <N> is the 1-based section index for this breakpoint.`,
+        `Save each screenshot using the filename pattern "step-${bpIdx + 1}-${safeName(suiteName)}_${safeName(bp.label)}_section-<N>.png", where <N> is the 1-based section index for this breakpoint.`,
         `Return one result per captured section, in order, with the exact filename used, a short descriptive sectionLabel (e.g. "hero", "testimonials", "footer"), and isFooter set to true for the final/footer section.`,
       ].join("\n");
 
@@ -397,6 +398,10 @@ async function main() {
         const navigatorCaptures = navigatorRun.finalOutput?.captures || [];
         if (navigatorCaptures.length === 0) {
           throw new Error("Navigator did not return any section captures");
+        }
+        if (!navigatorCaptures.some((capture) => capture.isFooter && capture.status === "passed")) {
+          bpReport.status = "failed";
+          bpReport.reason = "Navigator stopped before capturing the page footer";
         }
 
         for (const navigatorCapture of navigatorCaptures) {
@@ -413,6 +418,9 @@ async function main() {
               throw new Error(navigatorCapture?.reason || "Navigator did not complete this capture");
             }
             capture.dataUri = toDataUriFromPng(filePath);
+            if (!capture.dataUri) {
+              throw new Error(`Screenshot not found or unreadable: ${filePath}`);
+            }
             captures.push(capture);
             bpReport.captures.push({
               stepNumber,
@@ -457,7 +465,7 @@ async function main() {
           const promptLines = [
             `Breakpoint: ${bp.label} (${bp.width}x${bp.height}).`,
             `You are given ${auditable.length} screenshot(s) in order, one per page section. Review each independently.`,
-            ...auditable.map((c, i) => `Image ${i + 1} = scrollLabel "${c.label}".`),
+            ...auditable.map((c, i) => `Image ${i + 1} = scrollLabel "capture-${c.stepNumber}" (section: ${JSON.stringify(c.label)}).`),
           ];
 
           const content = [
@@ -470,7 +478,7 @@ async function main() {
 
           const byLabel = new Map((audit?.captures || []).map((c) => [c.scrollLabel, c]));
           for (const capture of auditable) {
-            const found = byLabel.get(capture.label);
+            const found = byLabel.get(`capture-${capture.stepNumber}`);
             const reportCapture = bpReport.captures.find((c) => c.stepNumber === capture.stepNumber);
             if (!reportCapture) continue;
 
@@ -541,7 +549,9 @@ async function main() {
     reportFileBaseName = path.basename(reportPath, path.extname(reportPath));
     console.log(`📄 HTML Report saved: ${reportPath}\n`);
     console.log(`__REPORT_FILE__${path.basename(reportPath)}`);
+    process.exitCode = failed > 0 ? 1 : 0;
   } catch (error) {
+    process.exitCode = 1;
     console.error(`\n❌ Responsive run failed:`, error instanceof Error ? error.message : error);
     if (error instanceof Error && error.stack) console.error(error.stack);
   } finally {

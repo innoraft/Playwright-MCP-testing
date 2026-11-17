@@ -104,8 +104,8 @@ export default function LLMConfig() {
     <div className="page-container">
       {/* Toast */}
       {toast && (
-        <div className="toast-container">
-          <div className={`toast ${toast.type}`}>
+        <div className="runner-toast-container">
+          <div className={`runner-toast ${toast.type}`}>
             <span>{toast.type === 'success' ? '✓' : '✕'}</span>
             {toast.message}
           </div>

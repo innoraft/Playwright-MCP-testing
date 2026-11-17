@@ -7,6 +7,8 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const { authFetch, token } = useAuth();
   const [tests, setTests] = useState([]);
   const [selectedTest, setSelectedTest] = useState('');
+  const [isTestMenuOpen, setIsTestMenuOpen] = useState(false);
+  const [testSearch, setTestSearch] = useState('');
   const [status, setStatus] = useState('idle'); // idle | running | done
   const [result, setResult] = useState(null);   // null | 'passed' | 'failed'
   const [logs, setLogs] = useState([]);
@@ -19,10 +21,17 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
   const logEndRef = useRef(null);
   const eventSourceRef = useRef(null);
   const runIdRef = useRef(null);
+  const testSelectorRef = useRef(null);
+  const testSearchRef = useRef(null);
   const liveLayoutRef = useRef(null);
   const runActivityRef = useRef(null);
   const showAnimation = TEST_RUNNER_UI.animation;
   const showTerminalOutput = TEST_RUNNER_UI.terminalOutput;
+  const filteredTests = useMemo(() => {
+    const query = testSearch.trim().toLowerCase();
+    if (!query) return tests;
+    return tests.filter(test => `${test.name} ${test.type}`.toLowerCase().includes(query));
+  }, [testSearch, tests]);
 
   // ── Toast helper ──────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
@@ -54,6 +63,23 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const closeTestMenu = (event) => {
+      if (!testSelectorRef.current?.contains(event.target)) {
+        setIsTestMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeTestMenu);
+    return () => document.removeEventListener('mousedown', closeTestMenu);
+  }, []);
+
+  useEffect(() => {
+    if (isTestMenuOpen) {
+      setTestSearch('');
+      requestAnimationFrame(() => testSearchRef.current?.focus());
+    }
+  }, [isTestMenuOpen]);
 
   // ── Focus live monitor/output split when run starts ───
   useEffect(() => {
@@ -324,25 +350,62 @@ export default function TestRunner({ onNavigateToReport, onRunningChange }) {
       <div className="config-card">
         <div className="runner-controls row">
           {/* Test Selector */}
-          <div className="runner-select-group col-10">
-            <label className="form-label">
+          <div className="runner-select-group col-10" ref={testSelectorRef}>
+            <label className="form-label" id="test-selector-label">
               <span className="form-label-icon">📋</span>
               Select Test
             </label>
-            <select
-              className="form-select"
-              value={selectedTest}
-              onChange={(e) => setSelectedTest(e.target.value)}
+            <button
+              type="button"
+              className="form-select runner-test-selector"
+              aria-labelledby="test-selector-label"
+              aria-haspopup="listbox"
+              aria-expanded={isTestMenuOpen}
               disabled={status === 'running'}
               id="test-selector"
+              onClick={() => setIsTestMenuOpen(isOpen => !isOpen)}
             >
-              <option value="">— Choose a test file —</option>
-              {tests.map(t => (
-                <option key={t.name} value={t.name}>
-                  {t.name.replace('.test.yml', '')} ({t.type})
-                </option>
-              ))}
-            </select>
+              <span className="runner-test-selector-value">
+                {selectedTest
+                  ? `${selectedTest.replace('.test.yml', '')} (${tests.find(test => test.name === selectedTest)?.type || 'unknown'})`
+                  : '— Choose a test file —'}
+              </span>
+            </button>
+            {isTestMenuOpen && (
+              <div className="runner-test-menu" role="dialog" aria-label="Search test files">
+                <input
+                  ref={testSearchRef}
+                  className="runner-test-search"
+                  type="search"
+                  placeholder="Search test files"
+                  value={testSearch}
+                  onChange={(event) => setTestSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setIsTestMenuOpen(false);
+                  }}
+                />
+                <div className="runner-test-options" id="test-selector-options" role="listbox" aria-labelledby="test-selector-label">
+                  {filteredTests.map(test => (
+                    <button
+                      type="button"
+                      key={test.name}
+                      className={`runner-test-option ${selectedTest === test.name ? 'selected' : ''}`}
+                      role="option"
+                      aria-selected={selectedTest === test.name}
+                      onClick={() => {
+                        setSelectedTest(test.name);
+                        setIsTestMenuOpen(false);
+                      }}
+                    >
+                      {test.name.replace('.test.yml', '')} ({test.type})
+                    </button>
+                  ))}
+                  {filteredTests.length === 0 && (
+                    <p className="runner-test-empty">No matching test files.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons + Status */}
